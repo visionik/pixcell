@@ -478,6 +478,18 @@ def _default_registry() -> Registry:
             extra="docx",
         )
     )
+    # PPTX renderer (bundled pptx-glimpse in QuickJS + resvg-py with pip install "pixcell[pptx]").
+    registry.register(
+        Renderer(
+            name="pptx",
+            loader="pixcell.docs.pptx:render",
+            suffixes=(".pptx",),
+            mime_types=(
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ),
+            extra="pptx",
+        )
+    )
     return registry
 
 
