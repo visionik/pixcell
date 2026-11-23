@@ -1,0 +1,14 @@
+{
+  "name": "pixcell-pptx-glimpse-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build script for vendoring pptx-glimpse as a QuickJS-compatible IIFE bundle for pixcell.docs.pptx.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node build.mjs --minify"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "pptx-glimpse": "5.3.1"
+  }
+}

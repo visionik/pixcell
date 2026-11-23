@@ -235,6 +235,10 @@ mermaid = [
 pdf = [
     { name = "pypdfium2" },
 ]
+pptx = [
+    { name = "quickjs-ng" },
+    { name = "resvg-py" },
+]
 svg = [
     { name = "resvg-py" },
 ]
@@ -264,13 +268,15 @@ requires-dist = [
     { name = "openpyxl", marker = "extra == 'xlsx'", specifier = ">=3.1" },
     { name = "pillow", specifier = ">=10.3" },
     { name = "pixcell", extras = ["svg"], marker = "extra == 'mermaid'" },
-    { name = "pixcell", extras = ["textual", "svg", "pdf", "docx", "xlsx", "mermaid"], marker = "extra == 'all'" },
+    { name = "pixcell", extras = ["textual", "svg", "pdf", "docx", "xlsx", "mermaid", "pptx"], marker = "extra == 'all'" },
     { name = "pypdfium2", marker = "extra == 'pdf'", specifier = ">=4.30" },
     { name = "quickjs-ng", marker = "extra == 'mermaid'", specifier = ">=0.18.0.1" },
+    { name = "quickjs-ng", marker = "extra == 'pptx'", specifier = ">=0.18.0.1" },
+    { name = "resvg-py", marker = "extra == 'pptx'", specifier = ">=0.5.0" },
     { name = "resvg-py", marker = "extra == 'svg'", specifier = ">=0.5.0" },
     { name = "textual", marker = "extra == 'textual'", specifier = ">=0.80" },
 ]
-provides-extras = ["textual", "svg", "pdf", "docx", "xlsx", "mermaid", "all"]
+provides-extras = ["textual", "svg", "pdf", "docx", "xlsx", "mermaid", "pptx", "all"]
 
 [package.metadata.requires-dev]
 dev = [

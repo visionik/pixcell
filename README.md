@@ -77,9 +77,11 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 | `pixcell[docx]` | Word documents (`mammoth`) | Live |
 | `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Live |
 | `pixcell[mermaid]` | Mermaid diagrams (Pele via `quickjs-ng`, rasterised via `resvg-py`) | Live |
-| `pixcell[pptx]` | PowerPoint decks | Coming |
+| `pixcell[pptx]` | PowerPoint decks (`quickjs-ng` + bundled `pptx-glimpse` + `resvg-py`) | Live |
 | `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Live |
 | `pixcell[all]` | All available extras | Live |
+
+Known `pixcell[pptx]` fidelity gaps (upstream `pptx-glimpse` in no-fonts mode): autoshape text colour (`fontRef` scheme colour) can render black, bullet glyphs render small, built-in table styles without embedded definitions fall back to plain grid lines, pie chart data labels are omitted, and EMF/WMF pictures fall back to a per-slide placeholder.
 
 ## Notes
 
