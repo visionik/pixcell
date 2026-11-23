@@ -29,14 +29,17 @@ from pixcell.docs import (
 )
 
 
-def test_importing_pixcell_docs_does_not_import_resvg_py():
+def test_importing_pixcell_docs_does_not_import_optional_backends():
     code = (
         "import sys, pixcell.docs as docs\n"
         "assert docs.supports('photo.png')\n"
         "assert docs.supports('diagram.svg')\n"
-        "assert len(docs.renderers()) >= 2\n"
+        "assert docs.supports('report.pdf')\n"
+        "assert len(docs.renderers()) >= 3\n"
         "assert 'resvg_py' not in sys.modules\n"
         "assert 'pixcell.docs.svg' not in sys.modules\n"
+        "assert 'pypdfium2' not in sys.modules\n"
+        "assert 'pixcell.docs.pdf' not in sys.modules\n"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
@@ -167,12 +170,12 @@ def test_unsupported_type_errors(tmp_path: Path):
     assert exc_info.value.path == unknown
     assert exc_info.value.suffix == ".unknownext"
 
-    # Extensionless PDF has a sniffed MIME type, but no PDF renderer is registered in step 1.
-    pdf_file = tmp_path / "mystery"
-    pdf_file.write_bytes(b"%PDF-1.7\n")
-    with pytest.raises(UnsupportedType) as pdf_exc:
-        docs.open(pdf_file)
-    assert pdf_exc.value.mime_type == "application/pdf"
+    # Extensionless HTML has a sniffed MIME type, with no HTML renderer registered yet.
+    html_file = tmp_path / "mystery"
+    html_file.write_bytes(b"<!DOCTYPE html><html><body>hi</body></html>\n")
+    with pytest.raises(UnsupportedType) as html_exc:
+        docs.open(html_file)
+    assert html_exc.value.mime_type == "text/html"
 
 
 def test_guard_rails_max_bytes_and_max_pages(tmp_path: Path):
