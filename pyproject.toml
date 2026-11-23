@@ -15,9 +15,11 @@ classifiers = [
 
 [project.optional-dependencies]
 textual = ["textual>=0.80"]
+svg = ["resvg-py>=0.5.0"]
+all = ["pixcell[textual,svg]"]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "textual>=0.80", "pywinpty>=2; sys_platform == 'win32'"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "textual>=0.80", "resvg-py>=0.5.0", "pywinpty>=2; sys_platform == 'win32'"]
 
 [build-system]
 requires = ["hatchling>=1.26"]

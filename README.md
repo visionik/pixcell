@@ -50,6 +50,33 @@ pictures itself. The widgets then write nothing, and the host reads `Image.image
 `python -m pixcell [image ...]` shows pictures; `python -m pixcell live [fps] [scroll]`
 runs a live picture with its frame rate and cost.
 
+## Documents
+
+`pixcell.docs` opens files into displayable outputs (`Picture` with lazy pages, `SVG`, or `HTML`) by file suffix or magic-byte sniffing, keeping heavy renderers behind optional extras:
+
+```python
+import pixcell.docs
+
+doc = pixcell.docs.open("diagram.svg")       # SVG(svg=..., width=..., height=...)
+picture = doc.to_picture(background="#fff")  # Picture with lazy pages (needs pixcell[svg])
+first_page = picture.pages[0]                # PIL.Image.Image
+```
+
+Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) work out of the box via Pillow. Guard rails default to `max_bytes=50 MiB` and `max_pages=200`.
+
+| Extra | Formats | Status |
+| --- | --- | --- |
+| *(built-in)* | PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, QOI | Live |
+| `pixcell[svg]` | SVG (rasterised via `resvg-py`) | Live |
+| `pixcell[pdf]` | PDF (`pypdfium2`) | Coming |
+| *(built-in)* | EPUB (stdlib `zipfile`, XHTML out) | Coming |
+| `pixcell[docx]` | Word documents (`mammoth`) | Coming |
+| `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Coming |
+| `pixcell[mermaid]` | Mermaid diagrams | Coming |
+| `pixcell[pptx]` | PowerPoint decks | Coming |
+| `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Coming |
+| `pixcell[all]` | All available extras | Live |
+
 ## Notes
 
 - What each terminal really does comes from [terminal-facts](https://github.com/visionik/terminal-facts),
