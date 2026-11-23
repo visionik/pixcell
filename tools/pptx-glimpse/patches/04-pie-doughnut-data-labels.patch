@@ -1,0 +1,324 @@
+--- a/@pptx-glimpse/document/dist/index.js
++++ b/@pptx-glimpse/document/dist/index.js
+@@ -14713,6 +14713,7 @@
+     ...parsedChart.ofPieType !== void 0 ? { ofPieType: parsedChart.ofPieType } : {},
+     ...parsedChart.secondPieSize !== void 0 ? { secondPieSize: parsedChart.secondPieSize } : {},
+     ...parsedChart.splitPos !== void 0 ? { splitPos: parsedChart.splitPos } : {},
++    ...parsedChart.dataLabels !== void 0 ? { dataLabels: parsedChart.dataLabels } : {},
+     legend: parseLegend(getChild(chart, "legend"))
+   };
+ }
+@@ -14825,6 +14826,7 @@
+   const ofPieType = chartType === "ofPie" ? parseOfPieType(getAttr(getChild(chartNode, "ofPieType"), "val")) : void 0;
+   const secondPieSize = chartType === "ofPie" ? parseNumberAttribute(getChild(chartNode, "secondPieSize"), "val", 75) : void 0;
+   const splitPos = chartType === "ofPie" ? parseNumberAttribute(getChild(chartNode, "splitPos"), "val", 2) : void 0;
++  const dataLabels = parseChartDataLabels(getChild(chartNode, "dLbls"));
+   return {
+     chartType,
+     series,
+@@ -14834,7 +14836,8 @@
+     ...radarStyle !== void 0 ? { radarStyle } : {},
+     ...ofPieType !== void 0 ? { ofPieType } : {},
+     ...secondPieSize !== void 0 ? { secondPieSize } : {},
+-    ...splitPos !== void 0 ? { splitPos } : {}
++    ...splitPos !== void 0 ? { splitPos } : {},
++    ...dataLabels !== void 0 ? { dataLabels } : {}
+   };
+ }
+ function parseSeries(ser, chartType, seriesIndex, colorContext) {
+@@ -14845,14 +14848,70 @@
+   const bubbleSizes = chartType === "bubble" ? parseNumericData(getChild(ser, "bubbleSize")) : void 0;
+   const color = resolveSeriesColor(getChild(ser, "spPr"), seriesIndex, colorContext);
+   const source = categorySeriesSource(ser, chartType);
++  const dataLabels = parseChartDataLabels(getChild(ser, "dLbls"));
+   return {
+     name,
+     values,
+     ...xValues !== void 0 ? { xValues } : {},
+     ...bubbleSizes !== void 0 ? { bubbleSizes } : {},
+     color,
+-    ...source !== void 0 ? { source } : {}
+-  };
++    ...source !== void 0 ? { source } : {},
++    ...dataLabels !== void 0 ? { dataLabels } : {}
++  };
++}
++function parseChartBoolChild(parent, childName) {
++  const child = getChild(parent, childName);
++  if (child === void 0) return void 0;
++  const val = getAttr(child, "val");
++  if (val === void 0) return true;
++  return val !== "0" && val !== "false";
++}
++function parseDataLabelText(tx) {
++  if (tx === void 0) return void 0;
++  const richText = parseChartTitle({ tx });
++  if (richText !== null) return richText;
++  const refText = parseSeriesName(tx);
++  return refText !== null ? refText : void 0;
++}
++function parseDataLabelFields(node) {
++  const deleted = parseChartBoolChild(node, "delete");
++  const showVal = parseChartBoolChild(node, "showVal");
++  const showPercent = parseChartBoolChild(node, "showPercent");
++  const showCatName = parseChartBoolChild(node, "showCatName");
++  const showSerName = parseChartBoolChild(node, "showSerName");
++  const position = getAttr(getChild(node, "dLblPos"), "val");
++  const separator = hasChild(node, "separator") ? String(getChildText(node, "separator") ?? "") : void 0;
++  const text = parseDataLabelText(getChild(node, "tx"));
++  const fields = {
++    ...deleted !== void 0 ? { delete: deleted } : {},
++    ...showVal !== void 0 ? { showVal } : {},
++    ...showPercent !== void 0 ? { showPercent } : {},
++    ...showCatName !== void 0 ? { showCatName } : {},
++    ...showSerName !== void 0 ? { showSerName } : {},
++    ...position !== void 0 ? { position } : {},
++    ...separator !== void 0 ? { separator } : {},
++    ...text !== void 0 ? { text } : {}
++  };
++  return Object.keys(fields).length > 0 ? fields : void 0;
++}
++function parseChartDataLabels(dLblsNode) {
++  if (dLblsNode === void 0) return void 0;
++  const base = parseDataLabelFields(dLblsNode) ?? {};
++  const points = [];
++  for (const dLbl of getChildArray(dLblsNode, "dLbl")) {
++    const idxRaw = getAttr(getChild(dLbl, "idx"), "val");
++    const index = idxRaw !== void 0 ? Number(idxRaw) : NaN;
++    if (!Number.isInteger(index) || index < 0) continue;
++    const pointFields = parseDataLabelFields(dLbl);
++    if (pointFields !== void 0) {
++      points.push({ index, ...pointFields });
++    }
++  }
++  const parsed = {
++    ...base,
++    ...points.length > 0 ? { points } : {}
++  };
++  return Object.keys(parsed).length > 0 ? parsed : void 0;
+ }
+ function categorySeriesSource(ser, chartType) {
+   if (chartType !== "bar" && chartType !== "line") return void 0;
+--- a/pptx-glimpse/dist/chunk-HYCC6Y6P.js
++++ b/pptx-glimpse/dist/chunk-HYCC6Y6P.js
+@@ -14743,8 +14743,60 @@
+   }
+   return parts.join("");
+ }
++function resolveCircularSliceLabelSpec(chart, series, pointIdx) {
++  const chartCfg = chart.dataLabels;
++  const serCfg = series.dataLabels;
++  const chartPt = chartCfg?.points?.find((p) => p.index === pointIdx);
++  const serPt = serCfg?.points?.find((p) => p.index === pointIdx);
++  const merged = {
++    ...chartCfg,
++    ...serCfg,
++    ...chartPt,
++    ...serPt
++  };
++  if (merged.delete) return null;
++  if (merged.text === void 0 && !merged.showVal && !merged.showPercent && !merged.showCatName && !merged.showSerName) {
++    return null;
++  }
++  return merged;
++}
++function formatCircularLabelValue(val) {
++  return Number.isInteger(val) ? String(val) : String(round2(val));
++}
++function buildCircularSliceLabelText(spec, chart, series, pointIdx, val, total) {
++  if (spec.text !== void 0) return spec.text;
++  const items = [];
++  if (spec.showSerName && series.name) items.push(series.name);
++  if (spec.showCatName && chart.categories[pointIdx]) items.push(chart.categories[pointIdx]);
++  if (spec.showVal) items.push(formatCircularLabelValue(val));
++  if (spec.showPercent && total > 0) items.push(`${Math.round(val / total * 100)}%`);
++  if (items.length === 0) return "";
++  const sep = spec.separator !== void 0 && spec.separator !== "" ? spec.separator : ", ";
++  return items.join(sep);
++}
++function contrastLabelFillForHex(hex) {
++  const clean = hex.replace("#", "");
++  const r = parseInt(clean.slice(0, 2), 16) || 0;
++  const g = parseInt(clean.slice(2, 4), 16) || 0;
++  const b = parseInt(clean.slice(4, 6), 16) || 0;
++  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
++  return luma >= 155 ? "#262626" : "#FFFFFF";
++}
++function renderCircularLabelSvg(text, lx, ly, anchor, fill) {
++  const lines = text.split(/\r?\n/);
++  if (lines.length === 1) {
++    return `<text x="${round2(lx)}" y="${round2(ly)}" text-anchor="${anchor}" dominant-baseline="central" font-size="11" font-weight="bold" fill="${fill}">${escapeXml(lines[0])}</text>`;
++  }
++  const lineH = 13;
++  const startY = ly - (lines.length - 1) * lineH / 2;
++  const tspans = lines.map(
++    (line, idx) => `<tspan x="${round2(lx)}" y="${round2(startY + idx * lineH)}">${escapeXml(line)}</tspan>`
++  ).join("");
++  return `<text text-anchor="${anchor}" dominant-baseline="central" font-size="11" font-weight="bold" fill="${fill}">${tspans}</text>`;
++}
+ function renderPieChart(chart, x, y, w, h, context) {
+   const parts = [];
++  const labelParts = [];
+   const series = chart.series[0];
+   if (!series || series.values.length === 0) {
+     debugChart(context, "chart.pie", "series is empty or has no values");
+@@ -14755,19 +14807,28 @@
+     debugChart(context, "chart.pie", "total value is 0");
+     return "";
+   }
++  const sliceMeta = series.values.map((val, i) => {
++    const sliceAngle = val / total * 2 * Math.PI;
++    const spec = val > 0 ? resolveCircularSliceLabelSpec(chart, series, i) : null;
++    const text = spec ? buildCircularSliceLabelText(spec, chart, series, i, val, total) : "";
++    const outside = Boolean(
++      text && (spec.position === "outEnd" || spec.position !== "inEnd" && spec.position !== "ctr" && sliceAngle < 0.35)
++    );
++    return { val, sliceAngle, spec, text, outside };
++  });
++  const hasOutsideLabels = sliceMeta.some((m) => m.outside);
+   const cx = x + w / 2;
+   const cy = y + h / 2;
+-  const r = Math.min(w, h) / 2 * 0.85;
++  const r = Math.min(w, h) / 2 * (hasOutsideLabels ? 0.7 : 0.85);
+   let currentAngle = -Math.PI / 2;
+-  for (let i = 0; i < series.values.length; i++) {
+-    const val = series.values[i];
+-    const sliceAngle = val / total * 2 * Math.PI;
++  for (let i = 0; i < sliceMeta.length; i++) {
++    const { val, sliceAngle, text, outside } = sliceMeta[i];
+     const color = getPieSliceColor(i, chart);
+     if (series.values.length === 1) {
+       parts.push(
+         `<circle cx="${round2(cx)}" cy="${round2(cy)}" r="${round2(r)}" ${fillAttr(color)}/>`
+       );
+-    } else {
++    } else if (val > 0) {
+       const x1 = cx + r * Math.cos(currentAngle);
+       const y1 = cy + r * Math.sin(currentAngle);
+       const x2 = cx + r * Math.cos(currentAngle + sliceAngle);
+@@ -14777,12 +14838,35 @@
+         `<path d="M${round2(cx)},${round2(cy)} L${round2(x1)},${round2(y1)} A${round2(r)},${round2(r)} 0 ${largeArc},1 ${round2(x2)},${round2(y2)} Z" ${fillAttr(color)}/>`
+       );
+     }
++    if (text) {
++      const midAngle = series.values.length === 1 ? -Math.PI / 2 : currentAngle + sliceAngle / 2;
++      if (outside) {
++        const labelR = r + 14;
++        const cosA = Math.cos(midAngle);
++        const anchor = cosA >= 0.15 ? "start" : cosA <= -0.15 ? "end" : "middle";
++        labelParts.push(
++          renderCircularLabelSvg(text, cx + labelR * cosA, cy + labelR * Math.sin(midAngle), anchor, "#404040")
++        );
++      } else {
++        const labelR = series.values.length === 1 ? 0 : r * 0.62;
++        labelParts.push(
++          renderCircularLabelSvg(
++            text,
++            cx + labelR * Math.cos(midAngle),
++            cy + labelR * Math.sin(midAngle),
++            "middle",
++            contrastLabelFillForHex(color.hex)
++          )
++        );
++      }
++    }
+     currentAngle += sliceAngle;
+   }
+-  return parts.join("");
++  return parts.concat(labelParts).join("");
+ }
+ function renderDoughnutChart(chart, x, y, w, h, context) {
+   const parts = [];
++  const labelParts = [];
+   const series = chart.series[0];
+   if (!series || series.values.length === 0) {
+     debugChart(context, "chart.doughnut", "series is empty or has no values");
+@@ -14793,15 +14877,24 @@
+     debugChart(context, "chart.doughnut", "total value is 0");
+     return "";
+   }
++  const sliceMeta = series.values.map((val, i) => {
++    const sliceAngle = val / total * 2 * Math.PI;
++    const spec = val > 0 ? resolveCircularSliceLabelSpec(chart, series, i) : null;
++    const text = spec ? buildCircularSliceLabelText(spec, chart, series, i, val, total) : "";
++    const outside = Boolean(
++      text && (spec.position === "outEnd" || spec.position !== "inEnd" && spec.position !== "ctr" && sliceAngle < 0.3)
++    );
++    return { val, sliceAngle, spec, text, outside };
++  });
++  const hasOutsideLabels = sliceMeta.some((m) => m.outside);
+   const cx = x + w / 2;
+   const cy = y + h / 2;
+-  const outerR = Math.min(w, h) / 2 * 0.85;
++  const outerR = Math.min(w, h) / 2 * (hasOutsideLabels ? 0.7 : 0.85);
+   const holeSize = chart.holeSize ?? 50;
+   const innerR = outerR * (holeSize / 100);
+   let currentAngle = -Math.PI / 2;
+-  for (let i = 0; i < series.values.length; i++) {
+-    const val = series.values[i];
+-    const sliceAngle = val / total * 2 * Math.PI;
++  for (let i = 0; i < sliceMeta.length; i++) {
++    const { val, sliceAngle, text, outside } = sliceMeta[i];
+     const color = getPieSliceColor(i, chart);
+     if (series.values.length === 1) {
+       parts.push(
+@@ -14810,7 +14903,7 @@
+       parts.push(
+         `<circle cx="${round2(cx)}" cy="${round2(cy)}" r="${round2(innerR)}" fill="#FFFFFF"/>`
+       );
+-    } else {
++    } else if (val > 0) {
+       const ox1 = cx + outerR * Math.cos(currentAngle);
+       const oy1 = cy + outerR * Math.sin(currentAngle);
+       const ox2 = cx + outerR * Math.cos(currentAngle + sliceAngle);
+@@ -14824,9 +14917,31 @@
+         `<path d="M${round2(ox1)},${round2(oy1)} A${round2(outerR)},${round2(outerR)} 0 ${largeArc},1 ${round2(ox2)},${round2(oy2)} L${round2(ix1)},${round2(iy1)} A${round2(innerR)},${round2(innerR)} 0 ${largeArc},0 ${round2(ix2)},${round2(iy2)} Z" ${fillAttr(color)}/>`
+       );
+     }
++    if (text) {
++      const midAngle = series.values.length === 1 ? -Math.PI / 2 : currentAngle + sliceAngle / 2;
++      if (outside) {
++        const labelR = outerR + 14;
++        const cosA = Math.cos(midAngle);
++        const anchor = cosA >= 0.15 ? "start" : cosA <= -0.15 ? "end" : "middle";
++        labelParts.push(
++          renderCircularLabelSvg(text, cx + labelR * cosA, cy + labelR * Math.sin(midAngle), anchor, "#404040")
++        );
++      } else {
++        const ringMidR = (innerR + outerR) / 2;
++        labelParts.push(
++          renderCircularLabelSvg(
++            text,
++            cx + ringMidR * Math.cos(midAngle),
++            cy + ringMidR * Math.sin(midAngle),
++            "middle",
++            contrastLabelFillForHex(color.hex)
++          )
++        );
++      }
++    }
+     currentAngle += sliceAngle;
+   }
+-  return parts.join("");
++  return parts.concat(labelParts).join("");
+ }
+ function renderScatterChart(chart, x, y, w, h, context) {
+   const parts = [];
+@@ -18722,7 +18837,8 @@
+       ...series.xValues !== void 0 ? { xValues: [...series.xValues] } : {},
+       ...series.bubbleSizes !== void 0 ? { bubbleSizes: [...series.bubbleSizes] } : {},
+       color: adaptColor(series.color),
+-      ...series.source !== void 0 ? { chartType: series.source.chartType } : {}
++      ...series.source !== void 0 ? { chartType: series.source.chartType } : {},
++      ...series.dataLabels !== void 0 ? { dataLabels: series.dataLabels } : {}
+     })),
+     categories: [...chartData.categories],
+     ...chartData.plotGroups !== void 0 ? {
+@@ -18743,6 +18859,7 @@
+     ...chartData.ofPieType !== void 0 ? { ofPieType: chartData.ofPieType } : {},
+     ...chartData.secondPieSize !== void 0 ? { secondPieSize: chartData.secondPieSize } : {},
+     ...chartData.splitPos !== void 0 ? { splitPos: chartData.splitPos } : {},
++    ...chartData.dataLabels !== void 0 ? { dataLabels: chartData.dataLabels } : {},
+     legend: chartData.legend !== null ? {
+       position: chartData.legend.position
+     } : null

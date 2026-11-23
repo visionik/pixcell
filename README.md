@@ -81,7 +81,7 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 | `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Live |
 | `pixcell[all]` | All available extras | Live |
 
-Known `pixcell[pptx]` fidelity gaps (upstream `pptx-glimpse` in no-fonts mode): autoshape text colour (`fontRef` scheme colour) can render black, bullet glyphs render small, built-in table styles without embedded definitions fall back to plain grid lines, pie chart data labels are omitted, and EMF/WMF pictures fall back to a per-slide placeholder.
+`pixcell[pptx]` renders slides via bundled `pptx-glimpse` in no-fonts mode (patched for autoshape `fontRef` theme colours/tints, proportional/`buSzPct`/`buSzPts` bullets, built-in OOXML table styles, pie/doughnut data labels, and EMF/WMF alternate-image fallbacks). Remaining fidelity limits: embedded fonts are not loaded (slides use built-in font metrics with system fallback fonts), complex EMF+/GDI+ metafiles without an embedded PNG/SVG fallback render as an in-slide `[EMF]`/`[WMF]` box, and 3D effects/animations/SmartArt without cached drawings are simplified or omitted.
 
 ## Notes
 

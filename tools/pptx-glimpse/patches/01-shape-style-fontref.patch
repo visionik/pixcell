@@ -1,0 +1,302 @@
+--- a/@pptx-glimpse/document/dist/index.js
++++ b/@pptx-glimpse/document/dist/index.js
+@@ -1367,6 +1367,8 @@
+ var COLOR_TRANSFORM_KINDS = /* @__PURE__ */ new Set([
+   "lumMod",
+   "lumOff",
++  "satMod",
++  "satOff",
+   "tint",
+   "shade",
+   "alpha"
+@@ -1380,7 +1382,21 @@
+   blue: "0000FF",
+   yellow: "FFFF00",
+   cyan: "00FFFF",
+-  magenta: "FF00FF"
++  magenta: "FF00FF",
++  ltgray: "D3D3D3",
++  lightgray: "D3D3D3",
++  dkgray: "A9A9A9",
++  darkgray: "A9A9A9",
++  gray: "808080",
++  grey: "808080",
++  silver: "C0C0C0",
++  maroon: "800000",
++  olive: "808000",
++  navy: "000080",
++  purple: "800080",
++  teal: "008080",
++  orange: "FFA500",
++  gold: "FFD700"
+ };
+ function parseColorElement(parent) {
+   if (!parent) return void 0;
+@@ -1411,6 +1427,14 @@
+         },
+         sys
+       );
++    }
++  }
++  const prst = getChild(parent, "prstClr");
++  if (prst) {
++    const val = getAttr(prst, "val");
++    const hex = val !== void 0 ? PRESET_COLOR_HEX[val.toLowerCase()] : void 0;
++    if (hex !== void 0) {
++      return withTransforms({ kind: "srgb", hex }, prst);
+     }
+   }
+   return void 0;
+@@ -2238,6 +2262,7 @@
+   const bullet = parseBullet(pPr);
+   const bulletFont = getAttr(getChild(pPr, "buFont"), "typeface");
+   const bulletColor = parseColorElement(getChild(pPr, "buClr"));
++  const bulletColorFollowText = hasChild(pPr, "buClrTx");
+   const bulletSizePct = numericAttr2(getChild(pPr, "buSzPct"), "val");
+   const tabStops = parseTabStops(pPr);
+   const defaultRunProperties = parseRunProperties(getChild(pPr, "defRPr"));
+@@ -2252,6 +2277,7 @@
+     ...bullet !== void 0 ? { bullet } : {},
+     ...bulletFont !== void 0 ? { bulletFont } : {},
+     ...bulletColor !== void 0 ? { bulletColor } : {},
++    ...bulletColorFollowText ? { bulletColorFollowText: true } : {},
+     ...bulletSizePct !== void 0 ? { bulletSizePct } : {},
+     ...tabStops.length > 0 ? { tabStops } : {},
+     ...defaultRunProperties !== void 0 ? { defaultRunProperties } : {}
+@@ -2645,12 +2671,25 @@
+   const fillRef = parseStyleReference(getChild(style, "fillRef"));
+   const lineRef = parseStyleReference(getChild(style, "lnRef"));
+   const effectRef = parseStyleReference(getChild(style, "effectRef"));
++  const fontRef = parseFontReference(getChild(style, "fontRef"));
+   const parsed = {
+     ...fillRef !== void 0 ? { fillRef } : {},
+     ...lineRef !== void 0 ? { lineRef } : {},
+-    ...effectRef !== void 0 ? { effectRef } : {}
++    ...effectRef !== void 0 ? { effectRef } : {},
++    ...fontRef !== void 0 ? { fontRef } : {}
+   };
+   return Object.keys(parsed).length > 0 ? parsed : void 0;
++}
++function parseFontReference(ref) {
++  if (ref === void 0) return void 0;
++  const idx = getAttr(ref, "idx");
++  const index = idx === "major" || idx === "minor" || idx === "none" ? idx : void 0;
++  const color = parseColorElement(ref);
++  if (index === void 0 && color === void 0) return void 0;
++  return {
++    ...index !== void 0 ? { index } : {},
++    ...color !== void 0 ? { color } : {}
++  };
+ }
+ function parseStyleReference(ref) {
+   if (ref === void 0) return void 0;
+@@ -14431,6 +14470,22 @@
+           hex = applyLuminance(hex, 1, Number(transform.value) / 1e5);
+         }
+         break;
++      case "satMod": {
++        const satOff = transforms?.find((candidate) => candidate.kind === "satOff");
++        const { h, s, l } = hexToHsl(hex);
++        hex = hslToHex(
++          h,
++          Math.min(1, Math.max(0, s * (Number(transform.value) / 1e5) + Number(satOff?.value ?? 0) / 1e5)),
++          l
++        );
++        break;
++      }
++      case "satOff":
++        if (!transforms?.some((candidate) => candidate.kind === "satMod")) {
++          const { h, s, l } = hexToHsl(hex);
++          hex = hslToHex(h, Math.min(1, Math.max(0, s + Number(transform.value) / 1e5)), l);
++        }
++        break;
+       case "tint":
+         hex = applyTint(hex, Number(transform.value) / 1e5);
+         break;
+@@ -15164,6 +15219,7 @@
+     sourceNodeTransform2(match?.masterNode)
+   );
+   const geometry = firstDefined(shape.geometry, layoutShape?.geometry, masterShape?.geometry);
++  const fontRef = firstDefined(shape.style?.fontRef, layoutShape?.style?.fontRef, masterShape?.style?.fontRef);
+   const effects = shape.effects !== void 0 ? computeEffectList(context, shape.effects) : shape.style?.effectRef !== void 0 ? resolveEffectReference(context, shape.style.effectRef) : void 0;
+   return {
+     kind: "shape",
+@@ -15181,7 +15237,9 @@
+         context,
+         shape.textBody,
+         [layoutShape?.textBody, masterShape?.textBody],
+-        placeholderType
++        placeholderType,
++        true,
++        fontRefToStyleEntry(fontRef)
+       )
+     } : {},
+     ...match !== void 0 ? { placeholderMatch: match } : {}
+@@ -15592,13 +15650,14 @@
+   };
+   return computed.grayscale || computed.biLevel !== void 0 || computed.blur !== void 0 || computed.lum !== void 0 || computed.duotone !== void 0 || computed.clrChange !== void 0 ? computed : void 0;
+ }
+-function computeTextBody(context, textBody, inheritedBodies = [], placeholderType, includeInheritedStyleChain = true) {
++function computeTextBody(context, textBody, inheritedBodies = [], placeholderType, includeInheritedStyleChain = true, extraStyleEntry) {
+   const styleChain = buildTextStyleChain(
+     context,
+     textBody,
+     inheritedBodies,
+     placeholderType,
+-    includeInheritedStyleChain
++    includeInheritedStyleChain,
++    extraStyleEntry
+   );
+   let inheritedProperties;
+   for (const inheritedBody of [...inheritedBodies].reverse()) {
+@@ -15662,16 +15721,34 @@
+     })
+   };
+ }
+-function buildTextStyleChain(context, textBody, inheritedBodies, placeholderType, includeInheritedStyleChain) {
++function fontRefToStyleEntry(fontRef) {
++  if (fontRef === void 0) return void 0;
++  const prefix = fontRef.index === "major" ? "+mj" : fontRef.index === "minor" ? "+mn" : void 0;
++  const defaultRunProperties = {
++    ...prefix !== void 0 ? {
++      typeface: `${prefix}-lt`,
++      typefaceEa: `${prefix}-ea`,
++      typefaceCs: `${prefix}-cs`
++    } : {},
++    ...fontRef.color !== void 0 ? { color: fontRef.color } : {}
++  };
++  if (Object.keys(defaultRunProperties).length === 0) return void 0;
++  return {
++    style: { defaultParagraph: { defaultRunProperties }, levels: {} },
++    includeRunDecorations: false
++  };
++}
++function buildTextStyleChain(context, textBody, inheritedBodies, placeholderType, includeInheritedStyleChain, extraStyleEntry) {
+   return [
+     ...textBody.listStyle !== void 0 ? [{ style: textBody.listStyle, includeRunDecorations: true }] : [],
+     ...includeInheritedStyleChain ? [
+       ...inheritedBodies.flatMap(
+         (body) => body?.listStyle !== void 0 ? [{ style: body.listStyle, includeRunDecorations: false }] : []
+       ),
++      ...extraStyleEntry !== void 0 ? [extraStyleEntry] : [],
+       ...styleEntry(getTxStyleForPlaceholder(context.master?.txStyles, placeholderType)),
+       ...styleEntry(context.source.presentation.defaultTextStyle)
+-    ] : []
++    ] : extraStyleEntry !== void 0 ? [extraStyleEntry] : []
+   ];
+ }
+ function getTxStyleForPlaceholder(txStyles, placeholderType) {
+@@ -15687,12 +15764,15 @@
+   return style.levels[level] ?? style.defaultParagraph;
+ }
+ function computeParagraphProperties(context, local, inherited) {
+-  const resolvedBulletColor = firstDefined(
+-    local?.bulletColor !== void 0 ? resolveColor(context, local.bulletColor) : void 0,
+-    ...inherited.map(
+-      (properties) => properties?.bulletColor !== void 0 ? resolveColor(context, properties.bulletColor) : void 0
+-    )
+-  );
++  let resolvedBulletColor;
++  for (const candidate of [local, ...inherited]) {
++    if (candidate === void 0) continue;
++    if (candidate.bulletColorFollowText) break;
++    if (candidate.bulletColor !== void 0) {
++      resolvedBulletColor = resolveColor(context, candidate.bulletColor);
++      if (resolvedBulletColor !== void 0) break;
++    }
++  }
+   const merged = {
+     ...local?.align !== void 0 ? { align: local.align } : { align: pickInheritedValue(inherited, "align") ?? "left" },
+     ...local?.level !== void 0 ? { level: local.level } : { level: 0 },
+--- a/pptx-glimpse/dist/chunk-HYCC6Y6P.js
++++ b/pptx-glimpse/dist/chunk-HYCC6Y6P.js
+@@ -17134,7 +17134,8 @@
+             lineFontSize,
+             fontScale,
+             bulletFontChain,
+-            context
++            context,
++            firstSeg?.properties.color
+           );
+           context.fontUsageCollector?.record(bulletFontChain, bulletText);
+           tspans.push(
+@@ -17195,7 +17196,8 @@
+           fontSize,
+           fontScale,
+           bulletFontChain,
+-          context
++          context,
++          firstRun?.properties.color
+         );
+         context.fontUsageCollector?.record(bulletFontChain, bulletText);
+         tspans.push(
+@@ -17338,7 +17340,7 @@
+ function buildBulletFontChain(props, runFontFamily, runFontFamilyEa) {
+   return [props.bulletFont, runFontFamily ?? null, runFontFamilyEa ?? null];
+ }
+-function buildBulletStyleAttrs(props, textFontSizePt, fontScale, bulletFontChain, context = createLegacyRendererContext()) {
++function buildBulletStyleAttrs(props, textFontSizePt, fontScale, bulletFontChain, context = createLegacyRendererContext(), fallbackColor = null) {
+   const styles = [];
+   if (props.bulletSizePct !== null) {
+     const size = textFontSizePt * (props.bulletSizePct / 1e5);
+@@ -17348,10 +17350,11 @@
+   if (fontFamilyValue) {
+     styles.push(`font-family="${fontFamilyValue}"`);
+   }
+-  if (props.bulletColor) {
+-    styles.push(`fill="${props.bulletColor.hex}"`);
+-    if (props.bulletColor.alpha < 1) {
+-      styles.push(`fill-opacity="${props.bulletColor.alpha}"`);
++  const effectiveColor = props.bulletColor ?? fallbackColor;
++  if (effectiveColor) {
++    styles.push(`fill="${effectiveColor.hex}"`);
++    if (effectiveColor.alpha < 1) {
++      styles.push(`fill-opacity="${effectiveColor.alpha}"`);
+     }
+   }
+   void fontScale;
+@@ -17830,7 +17833,7 @@
+   }
+   return { svg, width: totalWidth };
+ }
+-function renderBulletAsPath(bulletText, x, y, paraProps, textFontSizePt, fontScale, fontResolver, context, runFontFamily, runFontFamilyEa) {
++function renderBulletAsPath(bulletText, x, y, paraProps, textFontSizePt, fontScale, fontResolver, context, runFontFamily, runFontFamilyEa, fallbackColor = null) {
+   let bulletFontSize = textFontSizePt;
+   if (paraProps.bulletSizePct !== null) {
+     bulletFontSize = textFontSizePt * (paraProps.bulletSizePct / 1e5);
+@@ -17842,10 +17845,11 @@
+   const pathData = path.toPathData(2);
+   if (!pathData || pathData.length === 0) return [];
+   const attrs = [];
+-  if (paraProps.bulletColor) {
+-    attrs.push(`fill="${paraProps.bulletColor.hex}"`);
+-    if (paraProps.bulletColor.alpha < 1) {
+-      attrs.push(`fill-opacity="${paraProps.bulletColor.alpha}"`);
++  const effectiveColor = paraProps.bulletColor ?? fallbackColor;
++  if (effectiveColor) {
++    attrs.push(`fill="${effectiveColor.hex}"`);
++    if (effectiveColor.alpha < 1) {
++      attrs.push(`fill-opacity="${effectiveColor.alpha}"`);
+     }
+   } else {
+     attrs.push('fill="#000000"');
+@@ -17982,7 +17986,8 @@
+               fontResolver,
+               context,
+               firstSeg?.properties.fontFamily,
+-              firstSeg?.properties.fontFamilyEa
++              firstSeg?.properties.fontFamilyEa,
++              firstSeg?.properties.color
+             )
+           );
+         }
+@@ -18044,7 +18049,8 @@
+             fontResolver,
+             context,
+             firstRun?.properties.fontFamily,
+-            firstRun?.properties.fontFamilyEa
++            firstRun?.properties.fontFamilyEa,
++            firstRun?.properties.color
+           )
+         );
+       }
