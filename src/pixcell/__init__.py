@@ -11,4 +11,4 @@
 - :mod:`pixcell.browser` — headless Chromium over CDP and a live Textual ``BrowserView`` widget.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

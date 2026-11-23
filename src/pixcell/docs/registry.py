@@ -28,6 +28,7 @@ RendererCallable = Callable[..., Document]
 RendererLoader = RendererCallable | str
 Sniffer = Callable[[bytes, Path], bool]
 
+_PACKAGE = __package__ or __name__.rpartition(".")[0]
 _SNIFF_BYTES = 4096
 _EXCALIDRAW_TYPE_RE = re.compile(rb'"type"\s*:\s*"excalidraw"')
 _BMP_DIB_SIZES = frozenset({12, 40, 52, 56, 108, 124})
@@ -56,8 +57,9 @@ class Renderer:
     """Descriptor for a document renderer registered in :class:`Registry`.
 
     ``loader`` may be a callable ``(path, **options) -> Document`` or a lazy import string
-    ``"package.module:callable"``, so optional dependencies are never imported until a
-    matching file is opened.
+    ``"package.module:callable"`` (or a relative ``".module:callable"`` resolved against
+    this package), so optional dependencies are never imported until a matching file is
+    opened.
     """
 
     name: str
@@ -86,7 +88,10 @@ class Renderer:
             raise ValueError(
                 f"Renderer {self.name!r} loader string must be 'module:callable', got {self.loader!r}"
             )
-        module = importlib.import_module(module_name)
+        if module_name.startswith("."):
+            module = importlib.import_module(module_name, package=_PACKAGE)
+        else:
+            module = importlib.import_module(module_name)
         target = getattr(module, attr)
         if not callable(target):
             raise TypeError(f"Renderer {self.name!r} target {self.loader!r} is not callable")
@@ -427,7 +432,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="image",
-            loader="pixcell.docs.image:render",
+            loader=".image:render",
             suffixes=(
                 ".png",
                 ".jpg",
@@ -467,7 +472,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="svg",
-            loader="pixcell.docs.svg:render",
+            loader=".svg:render",
             suffixes=(".svg",),
             mime_types=("image/svg+xml",),
             extra="svg",
@@ -477,7 +482,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="pdf",
-            loader="pixcell.docs.pdf:render",
+            loader=".pdf:render",
             suffixes=(".pdf",),
             mime_types=("application/pdf",),
             extra="pdf",
@@ -487,7 +492,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="epub",
-            loader="pixcell.docs.epub:render",
+            loader=".epub:render",
             suffixes=(".epub",),
             mime_types=("application/epub+zip",),
             extra=None,
@@ -497,7 +502,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="docx",
-            loader="pixcell.docs.docx:render",
+            loader=".docx:render",
             suffixes=(".docx",),
             mime_types=(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -509,7 +514,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="xlsx",
-            loader="pixcell.docs.xlsx:render",
+            loader=".xlsx:render",
             suffixes=(".xlsx", ".xlsm"),
             mime_types=(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -522,7 +527,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="mermaid",
-            loader="pixcell.docs.mermaid:render",
+            loader=".mermaid:render",
             suffixes=(".mmd", ".mermaid"),
             mime_types=("text/vnd.mermaid",),
             extra="mermaid",
@@ -532,7 +537,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="excalidraw",
-            loader="pixcell.docs.excalidraw:render",
+            loader=".excalidraw:render",
             suffixes=(".excalidraw", ".excalidraw.json"),
             mime_types=("application/vnd.excalidraw+json",),
             extra="svg",
@@ -542,7 +547,7 @@ def _default_registry() -> Registry:
     registry.register(
         Renderer(
             name="pptx",
-            loader="pixcell.docs.pptx:render",
+            loader=".pptx:render",
             suffixes=(".pptx",),
             mime_types=(
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation",

@@ -83,6 +83,8 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 
 Known `pixcell[pptx]` fidelity gaps (upstream `pptx-glimpse` in no-fonts mode): autoshape text colour (`fontRef` scheme colour) can render black, bullet glyphs render small, built-in table styles without embedded definitions fall back to plain grid lines, pie chart data labels are omitted, and EMF/WMF pictures fall back to a per-slide placeholder.
 
+Embedding apps that vendor `pixcell` can override the install command shown in `MissingExtra` errors (default `pip install "pixcell[<extra>]"`) with `pixcell.docs.set_install_hint(...)` (accepting a `(extra) -> str` callable, a `"{extra}"` format string, or `None` to reset).
+
 ## Browser
 
 `pixcell.browser` (ported from `deftai/console`) drives a headless Chromium-family browser over CDP (`--remote-debugging-pipe`, stdlib-only) for screenshots, JavaScript evaluation, offline `pixcell.docs.HTML` rendering, and an interactive Textual `BrowserView` widget (`pip install pixcell[textual]`). If no Chromium browser is installed, `pixcell.browser.install()` downloads Google's Chrome headless shell into pixcell's user cache directory (`PIXCELL_BROWSER_CACHE_DIR` or `set_cache_dir()`).

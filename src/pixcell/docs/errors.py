@@ -2,7 +2,38 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+
+InstallHint = Callable[[str], str] | str
+
+
+def _default_install_hint(extra: str) -> str:
+    return f'pip install "pixcell[{extra}]"'
+
+
+_install_hint: Callable[[str], str] = _default_install_hint
+
+
+def set_install_hint(hint: InstallHint | None) -> None:
+    """Override the install command shown in :class:`MissingExtra` messages.
+
+    Pass a callable ``(extra: str) -> str``, a format string containing ``{extra}``
+    (e.g. ``'pip install "myapp[{extra}]"'``), or ``None`` to restore the default
+    ``'pip install "pixcell[<extra>]"'``.
+    """
+    global _install_hint
+    if hint is None:
+        _install_hint = _default_install_hint
+    elif isinstance(hint, str):
+        template = hint
+        _install_hint = lambda extra: template.format(extra=extra)
+    elif callable(hint):
+        _install_hint = hint
+    else:
+        raise TypeError(
+            f"install hint must be a callable, string, or None, got {type(hint).__name__}"
+        )
 
 
 class DocsError(Exception):
@@ -10,7 +41,11 @@ class DocsError(Exception):
 
 
 class MissingExtra(DocsError):
-    """A renderer matched, but the optional extra providing its dependency isn't installed."""
+    """A renderer matched, but the optional extra providing its dependency isn't installed.
+
+    The install command defaults to ``pip install "pixcell[<extra>]"`` and can be
+    customised by embedding apps via :func:`set_install_hint`.
+    """
 
     def __init__(
         self,
@@ -22,11 +57,12 @@ class MissingExtra(DocsError):
         self.extra = extra
         self.renderer = renderer
         self.dependency = dependency
+        self.install_hint = _install_hint(extra)
         who = f"renderer {renderer!r}" if renderer else f"the {extra!r} extra"
         missing = f" (missing {dependency!r})" if dependency else ""
         super().__init__(
             f"{who} requires optional dependencies{missing}. "
-            f'Install with: pip install "pixcell[{extra}]"'
+            f"Install with: {self.install_hint}"
         )
 
 
