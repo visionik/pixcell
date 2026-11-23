@@ -1,0 +1,713 @@
+--- a/@pptx-glimpse/document/dist/index.js
++++ b/@pptx-glimpse/document/dist/index.js
+@@ -3015,7 +3015,15 @@
+   const nodeId = sourceNodeId(cNvPr);
+   const name = getAttr(cNvPr, "name");
+   const tblPr = getChild(tbl, "tblPr");
+-  const tableStyleId = getChildText(tblPr, "tableStyleId");
++  const rawTableStyleId = getChildText(tblPr, "tableStyleId")?.trim();
++  const tableStyleId = rawTableStyleId !== "" ? rawTableStyleId : void 0;
++  const inlineTableStyle = parseTableStyleDefinition(getChild(tblPr, "tableStyle"), nextId);
++  const firstRow = isTrue(getAttr(tblPr, "firstRow"));
++  const lastRow = isTrue(getAttr(tblPr, "lastRow"));
++  const firstCol = isTrue(getAttr(tblPr, "firstCol"));
++  const lastCol = isTrue(getAttr(tblPr, "lastCol"));
++  const bandRow = isTrue(getAttr(tblPr, "bandRow"));
++  const bandCol = isTrue(getAttr(tblPr, "bandCol"));
+   const graphic = getChild(graphicFrame, "graphic");
+   const graphicData = getChild(graphic, "graphicData");
+   const transform = parseTransform(graphicFrame);
+@@ -3035,12 +3043,92 @@
+     table: {
+       columns,
+       rows,
+-      ...tableStyleId !== void 0 ? { tableStyleId } : {}
++      ...tableStyleId !== void 0 ? { tableStyleId } : {},
++      ...inlineTableStyle !== void 0 ? { tableStyle: inlineTableStyle } : {},
++      ...firstRow ? { firstRow: true } : {},
++      ...lastRow ? { lastRow: true } : {},
++      ...firstCol ? { firstCol: true } : {},
++      ...lastCol ? { lastCol: true } : {},
++      ...bandRow ? { bandRow: true } : {},
++      ...bandCol ? { bandCol: true } : {}
+     },
+     ...placeholder !== void 0 ? { placeholder } : {},
+     handle: { partPath, ...nodeId !== void 0 ? { nodeId } : {}, orderingSlot },
+     ...rawSidecars.length > 0 ? { rawSidecars } : {}
+   };
++}
++var TABLE_STYLE_REGIONS = [
++  "wholeTbl",
++  "band1H",
++  "band2H",
++  "band1V",
++  "band2V",
++  "firstCol",
++  "lastCol",
++  "firstRow",
++  "lastRow",
++  "nwCell",
++  "neCell",
++  "swCell",
++  "seCell"
++];
++function parseTableStyleDefinition(styleNode, nextId) {
++  if (styleNode === void 0) return void 0;
++  const regions = {};
++  for (const regionName of TABLE_STYLE_REGIONS) {
++    const part = getChild(styleNode, regionName);
++    if (part === void 0) continue;
++    const region = parseTableStyleRegion(part, nextId);
++    if (region !== void 0) regions[regionName] = region;
++  }
++  return Object.keys(regions).length > 0 ? regions : void 0;
++}
++function parseTableStyleRegion(partNode, nextId) {
++  const tcStyle = getChild(partNode, "tcStyle");
++  const fillContainer = getChild(tcStyle, "fill") ?? tcStyle;
++  const fill = parseFill(fillContainer, nextId);
++  const fillRef = parseStyleReference(getChild(tcStyle, "fillRef"));
++  const tcBdr = getChild(tcStyle, "tcBdr");
++  const borders = parseTableStyleRegionBorders(tcBdr, nextId);
++  const tcTxStyle = getChild(partNode, "tcTxStyle");
++  const textStyle = parseTableCellTextStyle(tcTxStyle);
++  const region = {
++    ...fill !== void 0 ? { fill } : {},
++    ...fillRef !== void 0 ? { fillRef } : {},
++    ...borders !== void 0 ? { borders } : {},
++    ...textStyle !== void 0 ? { textStyle } : {}
++  };
++  return Object.keys(region).length > 0 ? region : void 0;
++}
++function parseTableStyleRegionBorders(tcBdr, nextId) {
++  if (tcBdr === void 0) return void 0;
++  const sides = {};
++  for (const side of ["top", "bottom", "left", "right", "insideH", "insideV"]) {
++    const sideNode = getChild(tcBdr, side);
++    if (sideNode === void 0) continue;
++    const ln = getChild(sideNode, "ln");
++    if (ln !== void 0) {
++      const parsedLine = parseLine(ln, nextId);
++      if (parsedLine !== void 0) sides[side] = parsedLine;
++    }
++  }
++  return Object.keys(sides).length > 0 ? sides : void 0;
++}
++function parseTableCellTextStyle(tcTxStyle) {
++  if (tcTxStyle === void 0) return void 0;
++  const bAttr = getAttr(tcTxStyle, "b");
++  const iAttr = getAttr(tcTxStyle, "i");
++  const bold = bAttr === "on" || isTrue(bAttr) ? true : bAttr === "off" || bAttr === "0" || bAttr === "false" ? false : void 0;
++  const italic = iAttr === "on" || isTrue(iAttr) ? true : iAttr === "off" || iAttr === "0" || iAttr === "false" ? false : void 0;
++  const color = parseColorElement(tcTxStyle);
++  const fontRef = parseFontReference(getChild(tcTxStyle, "fontRef"));
++  const parsed = {
++    ...bold !== void 0 ? { bold } : {},
++    ...italic !== void 0 ? { italic } : {},
++    ...color !== void 0 ? { color } : {},
++    ...fontRef !== void 0 ? { fontRef } : {}
++  };
++  return Object.keys(parsed).length > 0 ? parsed : void 0;
+ }
+ function parseTableColumns(tblGrid) {
+   return getChildArray(tblGrid, "gridCol").map((col) => ({ width: emuAttr(col, "w") }));
+@@ -15272,6 +15360,7 @@
+ }
+ function computeTableElement(context, table, layer, partPath) {
+   const match = slidePlaceholderMatch(context, table, layer);
++  const resolvedStyle = resolveEffectiveTableStyle(context.source, table.table);
+   return {
+     kind: "table",
+     sourceLayer: layer,
+@@ -15281,7 +15370,9 @@
+     ...computedPlaceholderTransform(table.transform, match),
+     table: {
+       columns: table.table.columns.map((column) => ({ ...column })),
+-      rows: table.table.rows.map((row) => computeTableRow(context, table, row, partPath))
++      rows: table.table.rows.map(
++        (row, rowIdx) => computeTableRow(context, table, row, rowIdx, resolvedStyle, partPath)
++      )
+     },
+     ...match !== void 0 ? { placeholderMatch: match } : {}
+   };
+@@ -15443,15 +15534,479 @@
+     height: asEmu(height)
+   };
+ }
+-function computeTableRow(context, table, row, partPath) {
++var EMBEDDED_TABLE_STYLES_CACHE = /* @__PURE__ */ new WeakMap();
++var BUILTIN_ACCENT_FAMILIES = [
++  ["themed1", [
++    "{3C2FFA5D-87B4-456A-9821-1D502468CF0F}",
++    "{284E427A-3D55-4303-BF80-6455036E1DE7}",
++    "{69C7853C-536D-4A76-A0AE-DD22124D55A5}",
++    "{775DCB02-9BB8-47FD-8907-85C794F793BA}",
++    "{35758FB7-9AC5-4552-8A53-C91805E547FA}",
++    "{08FB837D-C827-4EFA-A057-4D05807E0F7C}"
++  ]],
++  ["themed2", [
++    "{D113A9D2-9D6B-4929-AA2D-F23B5EE8CBE7}",
++    "{18603FDC-E32A-4AB5-989C-0864C3EAD2B8}",
++    "{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}",
++    "{E269D01E-BC32-4049-B463-5C60D7B0CCD2}",
++    "{327F97BB-C833-4FB7-BDE5-3F7075034690}",
++    "{638B1855-1B75-4FBE-9DAF-5EC9BDD0BE54}"
++  ]],
++  ["light1", [
++    "{3B4B98B0-60AC-42C2-AFA5-B58CD77FA1E5}",
++    "{0E3FDE45-AF77-4B5C-9715-49D594BDF05E}",
++    "{C083E6E3-FA7D-4D7B-A595-EF9225AFEA82}",
++    "{D27102A9-8310-4765-A935-A1911B00CA55}",
++    "{5FD0F851-EC5A-4D38-B0AD-8093EC10F338}",
++    "{68D230F3-CF80-4859-8CE7-A43EE81993B5}"
++  ], "{9D7B26C5-4107-4FEC-AEDC-1716B250A1EF}"],
++  ["light2", [
++    "{69012ECD-51FC-41F1-AA8D-1B2483CD663E}",
++    "{72833802-FEF1-4C79-8D5D-14CF1EAF98D9}",
++    "{F2DE63D5-997A-4646-A377-4702673A728D}",
++    "{17292A2E-F333-43FB-9621-5CBBE7FDCDCB}",
++    "{5A111915-BE36-4E01-A7E5-04B1672EAD32}",
++    "{912C8C85-51F0-491E-9774-3900AFEF0FD7}"
++  ], "{3B202F80-3842-4A1D-B6A8-05A2B0BBDC5C}"],
++  ["light3", [
++    "{BC89EF96-8CEA-46FF-86C4-4CE0E7609802}",
++    "{5DA37D80-6434-44D0-A028-1B22A696006F}",
++    "{8799B23B-EC83-4686-B30A-512413B5E67A}",
++    "{ED083AE6-46FA-4A59-8FB0-9F97EB10719F}",
++    "{BDBED569-4797-4DF1-A0F4-6AAB3CD982D8}",
++    "{E8B1032C-EA38-4F05-BA0D-38AFFFC7BED3}"
++  ]],
++  ["medium1", [
++    "{B301B821-A1FF-4177-AEE7-76D212191A09}",
++    "{9DCAF9ED-07DC-4A11-8D7F-57B35C25682E}",
++    "{1FECB4D8-DB02-4DC6-A0A2-4F2EBAE1DC90}",
++    "{1E171933-4619-4E11-9A3F-F7608DF75F80}",
++    "{FABFCF23-3B69-468F-B69F-88F6DE6A72F2}",
++    "{10A1B5D5-9B99-4C35-A422-299274C87663}"
++  ], "{793D81CF-94F2-401A-BA57-92F5A7B2D0C5}"],
++  ["medium2", [
++    "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}",
++    "{21E4AEA4-8DFA-4A89-87EB-49C32662AFE0}",
++    "{F5AB1C69-6EDB-4FF4-983F-18BD219EF322}",
++    "{00A15C55-8517-42AA-B614-E9B94910E393}",
++    "{7DF18680-E054-41AD-8BC1-D1AEF772440D}",
++    "{93296810-A885-4BE3-A3E7-6D5BEEA58F35}"
++  ], "{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}"],
++  ["medium3", [
++    "{6E25E649-3F16-4E02-A733-19D2CDBF48F0}",
++    "{85BE263C-DBD7-4A20-BB59-AAB30ACAA65A}",
++    "{EB344D84-9AFB-497E-A393-DC336BA19D2E}",
++    "{EB9631B5-78F2-41C9-869B-9F39066F8104}",
++    "{74C1A8A3-306A-4EB7-A6B1-4F7E0EB9C5D6}",
++    "{2A488322-F2BA-4B5B-9748-0D474271808F}"
++  ]],
++  ["medium4", [
++    "{69CF1AB2-1976-4502-BF36-3FF5EA218861}",
++    "{8A107856-5554-42FB-B03E-39F5DBC370BA}",
++    "{0505E3EF-67EA-436B-A4C2-90CE558ECF9E}",
++    "{31E7D4AD-1C6C-4B9E-86D3-A0A6DA7BB3F0}",
++    "{53E9CECC-B561-4682-9DB5-C42EF6C2D794}",
++    "{16D9F66E-5EB9-4882-86FB-DCBF35E3C3E4}"
++  ]],
++  ["dark1", [
++    "{125E5076-3810-47DD-B79F-674D7AD40C01}",
++    "{37CE84F3-28C3-443E-9E96-99CF82512B78}",
++    "{D03447BB-5D67-496B-8E87-E561075AD55C}",
++    "{E929F9F4-4A8F-4326-A1B4-22849713DDAB}",
++    "{8FD4443E-F989-4FC4-A0C8-D5A2AF1F390B}",
++    "{AF606853-7671-496A-8E4F-DF71F8EC918B}"
++  ], "{E8034E78-7F5D-4C2E-B375-FC64B27BC917}"]
++];
++function tblSchemeColor(scheme, transformKind, transformVal) {
++  return {
++    kind: "scheme",
++    scheme,
++    ...transformKind !== void 0 ? { transforms: [{ kind: transformKind, value: asOoxmlPercent(transformVal) }] } : {}
++  };
++}
++function tblSolidFill(scheme, transformKind, transformVal) {
++  return { kind: "solid", color: tblSchemeColor(scheme, transformKind, transformVal) };
++}
++function tblLine(widthPt, scheme, transformKind, transformVal) {
++  return {
++    width: asEmu(Math.round(widthPt * 12700)),
++    fill: tblSolidFill(scheme, transformKind, transformVal)
++  };
++}
++function tblAllBorders(line) {
++  return { top: line, bottom: line, left: line, right: line, insideH: line, insideV: line };
++}
++function buildBuiltinFamilyStyle(family, accent) {
++  switch (family) {
++    case "light1":
++      return {
++        wholeTbl: {
++          borders: { top: tblLine(1, accent), bottom: tblLine(1, accent) },
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "tint", 86000) },
++        band1V: { fill: tblSolidFill(accent, "tint", 86000) },
++        firstRow: {
++          borders: { top: tblLine(1.5, accent), bottom: tblLine(1.5, accent) },
++          textStyle: { bold: true, color: tblSchemeColor(accent === "dk1" ? "tx1" : accent) }
++        },
++        lastRow: {
++          borders: { top: tblLine(1.5, accent), bottom: tblLine(1.5, accent) },
++          textStyle: { bold: true }
++        },
++        firstCol: { textStyle: { bold: true } },
++        lastCol: { textStyle: { bold: true } }
++      };
++    case "light2":
++      return {
++        wholeTbl: {
++          borders: { top: tblLine(1, accent), bottom: tblLine(1, accent), left: tblLine(1, accent), right: tblLine(1, accent) },
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { borders: { top: tblLine(1, accent), bottom: tblLine(1, accent) }, fill: tblSolidFill(accent, "tint", 90000) },
++        band1V: { fill: tblSolidFill(accent, "tint", 90000) },
++        firstRow: { fill: tblSolidFill(accent), textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        lastRow: { borders: { top: tblLine(2, accent) }, textStyle: { bold: true } },
++        firstCol: { textStyle: { bold: true } },
++        lastCol: { textStyle: { bold: true } }
++      };
++    case "light3":
++      return {
++        wholeTbl: {
++          borders: tblAllBorders(tblLine(1, accent)),
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "tint", 86000) },
++        band1V: { fill: tblSolidFill(accent, "tint", 86000) },
++        firstRow: {
++          borders: { bottom: tblLine(2.25, accent) },
++          textStyle: { bold: true, color: tblSchemeColor(accent) }
++        },
++        lastRow: { borders: { top: tblLine(2.25, accent) }, textStyle: { bold: true } },
++        firstCol: { textStyle: { bold: true } },
++        lastCol: { textStyle: { bold: true } }
++      };
++    case "medium1":
++      return {
++        wholeTbl: {
++          fill: tblSolidFill("lt1"),
++          borders: {
++            top: tblLine(1, accent),
++            bottom: tblLine(1, accent),
++            left: tblLine(1, accent),
++            right: tblLine(1, accent),
++            insideH: tblLine(1, accent)
++          },
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "tint", 82000) },
++        band1V: { fill: tblSolidFill(accent, "tint", 82000) },
++        firstRow: { fill: tblSolidFill(accent), textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        lastRow: { borders: { top: tblLine(2.25, accent) }, textStyle: { bold: true } },
++        firstCol: { textStyle: { bold: true } },
++        lastCol: { textStyle: { bold: true } }
++      };
++    case "medium2":
++    case "themed1":
++      return {
++        wholeTbl: {
++          fill: tblSolidFill(accent, "tint", 88000),
++          borders: tblAllBorders(tblLine(1, "lt1")),
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "tint", 72000) },
++        band2H: { fill: tblSolidFill(accent, "tint", 88000) },
++        band1V: { fill: tblSolidFill(accent, "tint", 72000) },
++        band2V: { fill: tblSolidFill(accent, "tint", 88000) },
++        firstRow: {
++          fill: tblSolidFill(accent),
++          borders: { bottom: tblLine(3, "lt1") },
++          textStyle: { bold: true, color: tblSchemeColor("lt1") }
++        },
++        lastRow: {
++          fill: tblSolidFill(accent),
++          borders: { top: tblLine(3, "lt1") },
++          textStyle: { bold: true, color: tblSchemeColor("lt1") }
++        },
++        firstCol: {
++          fill: tblSolidFill(accent),
++          textStyle: { bold: true, color: tblSchemeColor("lt1") }
++        },
++        lastCol: {
++          fill: tblSolidFill(accent),
++          textStyle: { bold: true, color: tblSchemeColor("lt1") }
++        }
++      };
++    case "medium3":
++      return {
++        wholeTbl: {
++          borders: { top: tblLine(2.25, "tx1"), bottom: tblLine(2.25, "tx1"), insideH: tblLine(1, "tx1") },
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { fill: tblSolidFill("tx1", "tint", 88000) },
++        band1V: { fill: tblSolidFill("tx1", "tint", 88000) },
++        firstRow: {
++          fill: tblSolidFill(accent),
++          borders: { bottom: tblLine(2.25, "tx1") },
++          textStyle: { bold: true, color: tblSchemeColor("lt1") }
++        },
++        lastRow: { borders: { top: tblLine(2.25, "tx1"), bottom: tblLine(2.25, "tx1") }, textStyle: { bold: true } },
++        firstCol: { textStyle: { bold: true } },
++        lastCol: { textStyle: { bold: true } }
++      };
++    case "medium4":
++      return {
++        wholeTbl: {
++          fill: tblSolidFill(accent, "tint", 88000),
++          borders: tblAllBorders(tblLine(1, accent)),
++          textStyle: { color: tblSchemeColor("tx1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "tint", 74000) },
++        band1V: { fill: tblSolidFill(accent, "tint", 74000) },
++        firstRow: {
++          fill: tblSolidFill(accent, "tint", 55000),
++          borders: { bottom: tblLine(2.25, accent) },
++          textStyle: { bold: true, color: tblSchemeColor("dk1") }
++        },
++        lastRow: { borders: { top: tblLine(2.25, accent) }, textStyle: { bold: true } },
++        firstCol: { textStyle: { bold: true } },
++        lastCol: { textStyle: { bold: true } }
++      };
++    case "themed2":
++      return {
++        wholeTbl: {
++          fill: tblSolidFill(accent),
++          borders: { top: tblLine(1, "lt1"), bottom: tblLine(1, "lt1"), insideH: tblLine(1, "lt1") },
++          textStyle: { color: tblSchemeColor("lt1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "shade", 82000) },
++        band1V: { fill: tblSolidFill(accent, "shade", 82000) },
++        firstRow: { borders: { bottom: tblLine(3, "lt1") }, textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        lastRow: { borders: { top: tblLine(3, "lt1") }, textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        firstCol: { textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        lastCol: { textStyle: { bold: true, color: tblSchemeColor("lt1") } }
++      };
++    case "dark1":
++      return {
++        wholeTbl: {
++          fill: tblSolidFill(accent, "shade", 55000),
++          borders: tblAllBorders(tblLine(1, "lt1")),
++          textStyle: { color: tblSchemeColor("lt1") }
++        },
++        band1H: { fill: tblSolidFill(accent, "shade", 72000) },
++        band1V: { fill: tblSolidFill(accent, "shade", 72000) },
++        firstRow: {
++          fill: tblSolidFill("dk1"),
++          borders: { bottom: tblLine(3, "lt1") },
++          textStyle: { bold: true, color: tblSchemeColor("lt1") }
++        },
++        lastRow: { borders: { top: tblLine(3, "lt1") }, textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        firstCol: { fill: tblSolidFill(accent, "shade", 40000), textStyle: { bold: true, color: tblSchemeColor("lt1") } },
++        lastCol: { fill: tblSolidFill(accent, "shade", 40000), textStyle: { bold: true, color: tblSchemeColor("lt1") } }
++      };
++  }
++  return void 0;
++}
++var BUILTIN_TABLE_STYLES_MAP = /* @__PURE__ */ (() => {
++  const map = /* @__PURE__ */ new Map();
++  map.set("{2D5ABB26-0587-4C30-8999-92F81FD0307C}", {
++    wholeTbl: { textStyle: { color: tblSchemeColor("tx1") } }
++  });
++  map.set("{5940675A-B579-460E-94D1-54222C63F5DA}", {
++    wholeTbl: {
++      borders: tblAllBorders(tblLine(1, "tx1")),
++      textStyle: { color: tblSchemeColor("tx1") }
++    },
++    firstRow: { textStyle: { bold: true } },
++    lastRow: { textStyle: { bold: true } },
++    firstCol: { textStyle: { bold: true } },
++    lastCol: { textStyle: { bold: true } }
++  });
++  for (const [family, guids, baseGuid] of BUILTIN_ACCENT_FAMILIES) {
++    if (baseGuid !== void 0) {
++      const baseStyle = buildBuiltinFamilyStyle(family, "dk1");
++      if (baseStyle !== void 0) map.set(baseGuid, baseStyle);
++    }
++    guids.forEach((guid, idx) => {
++      const style = buildBuiltinFamilyStyle(family, `accent${idx + 1}`);
++      if (style !== void 0) map.set(guid, style);
++    });
++  }
++  const dark2Pairs = [
++    ["{0660B408-B3CF-4A94-85FC-2B1E0A45F4A2}", "accent1", "accent2"],
++    ["{91EBBBCC-DAD2-459C-BE2E-F6DE35CF9A28}", "accent3", "accent4"],
++    ["{E4EC2841-47D5-4CBD-9F4F-D5CB6B033EB3}", "accent5", "accent6"]
++  ];
++  for (const [guid, hdrAccent, bdrAccent] of dark2Pairs) {
++    map.set(guid, {
++      wholeTbl: { fill: tblSolidFill("dk1", "tint", 82000), textStyle: { color: tblSchemeColor("tx1") } },
++      band1H: { fill: tblSolidFill("dk1", "tint", 68000) },
++      firstRow: {
++        fill: tblSolidFill(hdrAccent),
++        borders: { bottom: tblLine(2.25, bdrAccent) },
++        textStyle: { bold: true, color: tblSchemeColor("lt1") }
++      },
++      lastRow: { borders: { top: tblLine(2.25, bdrAccent) }, textStyle: { bold: true } }
++    });
++  }
++  return map;
++})();
++function lookupEmbeddedTableStyle(source, styleId) {
++  if (styleId === void 0) return void 0;
++  let byId = EMBEDDED_TABLE_STYLES_CACHE.get(source);
++  if (byId === void 0) {
++    byId = /* @__PURE__ */ new Map();
++    const presRels = resolveComputedRelationships(source, source.presentation.partPath);
++    const rel = presRels.find((candidate) => candidate.type.endsWith("/tableStyles"));
++    const tableStylesPath = rel?.targetPartPath ?? asPartPath("ppt/tableStyles.xml");
++    const xml = readRawPackageText(source, tableStylesPath);
++    if (xml !== void 0) {
++      const lst = getChild(parseXml(xml), "tblStyleLst");
++      const nextId = createSidecarIdFactory(tableStylesPath);
++      for (const node of getChildArray(lst, "tblStyle")) {
++        const id = getAttr(node, "styleId")?.trim().toUpperCase();
++        if (!id) continue;
++        const parsed = parseTableStyleDefinition(node, nextId);
++        if (parsed !== void 0) byId.set(id, parsed);
++      }
++    }
++    EMBEDDED_TABLE_STYLES_CACHE.set(source, byId);
++  }
++  return byId.get(styleId.toUpperCase());
++}
++function resolveEffectiveTableStyle(source, tableModel) {
++  if (tableModel.tableStyle !== void 0) return tableModel.tableStyle;
++  const styleId = tableModel.tableStyleId;
++  if (styleId === void 0) return void 0;
++  return lookupEmbeddedTableStyle(source, styleId) ?? BUILTIN_TABLE_STYLES_MAP.get(styleId.toUpperCase());
++}
++function applyRegionBorders(target, regionKind, regionBorders, isOuterTop, isOuterBottom, isOuterLeft, isOuterRight) {
++  if (regionBorders === void 0) return;
++  if (regionKind === "wholeTbl") {
++    const top = isOuterTop ? regionBorders.top : regionBorders.insideH;
++    const bottom = isOuterBottom ? regionBorders.bottom : regionBorders.insideH;
++    const left = isOuterLeft ? regionBorders.left : regionBorders.insideV;
++    const right = isOuterRight ? regionBorders.right : regionBorders.insideV;
++    if (top !== void 0) target.top = top;
++    if (bottom !== void 0) target.bottom = bottom;
++    if (left !== void 0) target.left = left;
++    if (right !== void 0) target.right = right;
++    return;
++  }
++  if (regionKind === "row") {
++    if (regionBorders.top !== void 0) target.top = regionBorders.top;
++    if (regionBorders.bottom !== void 0) target.bottom = regionBorders.bottom;
++    const left = isOuterLeft ? regionBorders.left : regionBorders.insideV;
++    const right = isOuterRight ? regionBorders.right : regionBorders.insideV;
++    if (left !== void 0) target.left = left;
++    if (right !== void 0) target.right = right;
++    return;
++  }
++  if (regionKind === "col") {
++    if (regionBorders.left !== void 0) target.left = regionBorders.left;
++    if (regionBorders.right !== void 0) target.right = regionBorders.right;
++    const top = isOuterTop ? regionBorders.top : regionBorders.insideH;
++    const bottom = isOuterBottom ? regionBorders.bottom : regionBorders.insideH;
++    if (top !== void 0) target.top = top;
++    if (bottom !== void 0) target.bottom = bottom;
++    return;
++  }
++  if (regionBorders.top !== void 0) target.top = regionBorders.top;
++  if (regionBorders.bottom !== void 0) target.bottom = regionBorders.bottom;
++  if (regionBorders.left !== void 0) target.left = regionBorders.left;
++  if (regionBorders.right !== void 0) target.right = regionBorders.right;
++}
++function cascadeTableCellStyle(tableStyle, tableModel, rowIdx, colIdx, cell) {
++  const numRows = tableModel.rows.length;
++  const numCols = tableModel.columns.length;
++  const endRowIdx = rowIdx + Math.max(1, cell.rowSpan ?? 1) - 1;
++  const endColIdx = colIdx + Math.max(1, cell.gridSpan ?? 1) - 1;
++  const isOuterTop = rowIdx === 0;
++  const isOuterBottom = endRowIdx >= numRows - 1;
++  const isOuterLeft = colIdx === 0;
++  const isOuterRight = endColIdx >= numCols - 1;
++  const isFirstRow = Boolean(tableModel.firstRow) && isOuterTop;
++  const isLastRow = Boolean(tableModel.lastRow) && isOuterBottom && (!isFirstRow || numRows > 1);
++  const isFirstCol = Boolean(tableModel.firstCol) && isOuterLeft;
++  const isLastCol = Boolean(tableModel.lastCol) && isOuterRight && (!isFirstCol || numCols > 1);
++  const active = [];
++  if (tableStyle.wholeTbl !== void 0) active.push(["wholeTbl", tableStyle.wholeTbl]);
++  if (tableModel.bandCol && !isFirstCol && !isLastCol) {
++    const bandColIdx = colIdx - (tableModel.firstCol ? 1 : 0);
++    const bandRegion = bandColIdx % 2 === 0 ? tableStyle.band1V : tableStyle.band2V;
++    if (bandRegion !== void 0) active.push(["col", bandRegion]);
++  }
++  if (tableModel.bandRow && !isFirstRow && !isLastRow) {
++    const bandRowIdx = rowIdx - (tableModel.firstRow ? 1 : 0);
++    const bandRegion = bandRowIdx % 2 === 0 ? tableStyle.band1H : tableStyle.band2H;
++    if (bandRegion !== void 0) active.push(["row", bandRegion]);
++  }
++  if (isFirstCol && tableStyle.firstCol !== void 0) active.push(["col", tableStyle.firstCol]);
++  if (isLastCol && tableStyle.lastCol !== void 0) active.push(["col", tableStyle.lastCol]);
++  if (isFirstRow && tableStyle.firstRow !== void 0) active.push(["row", tableStyle.firstRow]);
++  if (isLastRow && tableStyle.lastRow !== void 0) active.push(["row", tableStyle.lastRow]);
++  if (isFirstRow && isFirstCol && tableStyle.nwCell !== void 0) active.push(["corner", tableStyle.nwCell]);
++  if (isFirstRow && isLastCol && tableStyle.neCell !== void 0) active.push(["corner", tableStyle.neCell]);
++  if (isLastRow && isFirstCol && tableStyle.swCell !== void 0) active.push(["corner", tableStyle.swCell]);
++  if (isLastRow && isLastCol && tableStyle.seCell !== void 0) active.push(["corner", tableStyle.seCell]);
++
++  let fill;
++  let fillRef;
++  const borders = {};
++  const textProps = {};
++  for (const [kind, region] of active) {
++    if (region.fill !== void 0) {
++      fill = region.fill;
++      fillRef = void 0;
++    } else if (region.fillRef !== void 0) {
++      fillRef = region.fillRef;
++      fill = void 0;
++    }
++    applyRegionBorders(borders, kind, region.borders, isOuterTop, isOuterBottom, isOuterLeft, isOuterRight);
++    if (region.textStyle !== void 0) {
++      if (region.textStyle.bold !== void 0) textProps.bold = region.textStyle.bold;
++      if (region.textStyle.italic !== void 0) textProps.italic = region.textStyle.italic;
++      if (region.textStyle.color !== void 0) textProps.color = region.textStyle.color;
++      else if (region.textStyle.fontRef?.color !== void 0) textProps.color = region.textStyle.fontRef.color;
++      const idx = region.textStyle.fontRef?.index;
++      if (idx === "major" || idx === "minor") {
++        const prefix = idx === "major" ? "+mj" : "+mn";
++        textProps.typeface = `${prefix}-lt`;
++        textProps.typefaceEa = `${prefix}-ea`;
++        textProps.typefaceCs = `${prefix}-cs`;
++      }
++    }
++  }
++  const textStyleEntry = Object.keys(textProps).length > 0 ? {
++    style: { defaultParagraph: { defaultRunProperties: textProps }, levels: {} },
++    includeRunDecorations: true
++  } : void 0;
++  return { fill, fillRef, borders, textStyleEntry };
++}
++function mergeTableCellBorders(styleBorders, explicitBorders) {
++  const merged = {};
++  for (const side of ["top", "bottom", "left", "right"]) {
++    const chosen = explicitBorders?.[side] ?? styleBorders?.[side];
++    if (chosen !== void 0 && chosen.fill?.kind !== "none") {
++      merged[side] = chosen;
++    }
++  }
++  return Object.keys(merged).length > 0 ? merged : void 0;
++}
++function computeTableRow(context, table, row, rowIdx, resolvedStyle, partPath) {
+   return {
+     source: row,
+     height: row.height,
+-    cells: row.cells.map((cell) => computeTableCell(context, table, cell, partPath))
+-  };
+-}
+-function computeTableCell(context, table, cell, partPath) {
+-  const borders = cell.borders !== void 0 ? computeCellBorders(context, cell.borders, partPath) : table.table.tableStyleId !== void 0 ? computeCellBorders(context, DEFAULT_TABLE_STYLE_BORDERS, partPath) : void 0;
++    cells: row.cells.map(
++      (cell, colIdx) => computeTableCell(context, table, cell, rowIdx, colIdx, resolvedStyle, partPath)
++    )
++  };
++}
++function computeTableCell(context, table, cell, rowIdx, colIdx, resolvedStyle, partPath) {
++  const cascaded = resolvedStyle !== void 0 ? cascadeTableCellStyle(resolvedStyle, table.table, rowIdx, colIdx, cell) : void 0;
++  const rawBorders = cascaded !== void 0 ? mergeTableCellBorders(cascaded.borders, cell.borders) : cell.borders !== void 0 ? mergeTableCellBorders(void 0, cell.borders) : table.table.tableStyleId !== void 0 ? DEFAULT_TABLE_STYLE_BORDERS : void 0;
++  const borders = rawBorders !== void 0 ? computeCellBorders(context, rawBorders, partPath) : void 0;
++  const computedCellFill = cell.fill !== void 0 ? computeFill(context, cell.fill, partPath) : cascaded?.fill !== void 0 && cascaded.fill.kind !== "none" ? computeFill(context, cascaded.fill, partPath) : cascaded?.fillRef !== void 0 ? resolveFillReference(context, cascaded.fillRef, partPath) : void 0;
+   const textBody = cell.textBody === void 0 ? void 0 : {
+     ...cell.textBody,
+     properties: {
+@@ -15464,8 +16019,10 @@
+   };
+   return {
+     source: cell,
+-    ...textBody !== void 0 ? { textBody: computeTextBody(context, textBody, [], void 0, false) } : {},
+-    ...cell.fill !== void 0 ? { fill: computeFill(context, cell.fill, partPath) } : {},
++    ...textBody !== void 0 ? {
++      textBody: computeTextBody(context, textBody, [], void 0, false, cascaded?.textStyleEntry)
++    } : {},
++    ...computedCellFill !== void 0 ? { fill: computedCellFill } : {},
+     ...borders !== void 0 ? { borders } : {},
+     gridSpan: cell.gridSpan,
+     rowSpan: cell.rowSpan,
+--- a/pptx-glimpse/dist/chunk-HYCC6Y6P.js
++++ b/pptx-glimpse/dist/chunk-HYCC6Y6P.js
+@@ -18200,6 +18200,9 @@
+   const colWidths = table.columns.map((col) => emuToPixels(col.width));
+   const rowHeights = table.rows.map((row) => emuToPixels(row.height));
+   const parts = [];
++  const fillParts = [];
++  const borderItems = [];
++  const textParts = [];
+   const defs = [];
+   parts.push(`<g transform="${transformAttr}">`);
+   let y = 0;
+@@ -18218,33 +18221,41 @@
+       const cellH = computeSpannedSize(rowHeights, rowIdx, cell.rowSpan);
+       const fillResult = renderFillAttrs(cell.fill, context);
+       if (fillResult.defs) defs.push(fillResult.defs);
+-      parts.push(
++      fillParts.push(
+         `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" ${fillResult.attrs}/>`
+       );
+       if (cell.borders) {
+         if (cell.borders.top) {
+           const topResult = renderOutlineAttrs(cell.borders.top);
+           if (topResult.defs) defs.push(topResult.defs);
+-          parts.push(`<line x1="${x}" y1="${y}" x2="${x + cellW}" y2="${y}" ${topResult.attrs}/>`);
++          borderItems.push({
++            width: cell.borders.top.width,
++            svg: `<line x1="${x}" y1="${y}" x2="${x + cellW}" y2="${y}" ${topResult.attrs}/>`
++          });
+         }
+         if (cell.borders.bottom) {
+           const bottomResult = renderOutlineAttrs(cell.borders.bottom);
+           if (bottomResult.defs) defs.push(bottomResult.defs);
+-          parts.push(
+-            `<line x1="${x}" y1="${y + cellH}" x2="${x + cellW}" y2="${y + cellH}" ${bottomResult.attrs}/>`
+-          );
++          borderItems.push({
++            width: cell.borders.bottom.width,
++            svg: `<line x1="${x}" y1="${y + cellH}" x2="${x + cellW}" y2="${y + cellH}" ${bottomResult.attrs}/>`
++          });
+         }
+         if (cell.borders.left) {
+           const leftResult = renderOutlineAttrs(cell.borders.left);
+           if (leftResult.defs) defs.push(leftResult.defs);
+-          parts.push(`<line x1="${x}" y1="${y}" x2="${x}" y2="${y + cellH}" ${leftResult.attrs}/>`);
++          borderItems.push({
++            width: cell.borders.left.width,
++            svg: `<line x1="${x}" y1="${y}" x2="${x}" y2="${y + cellH}" ${leftResult.attrs}/>`
++          });
+         }
+         if (cell.borders.right) {
+           const rightResult = renderOutlineAttrs(cell.borders.right);
+           if (rightResult.defs) defs.push(rightResult.defs);
+-          parts.push(
+-            `<line x1="${x + cellW}" y1="${y}" x2="${x + cellW}" y2="${y + cellH}" ${rightResult.attrs}/>`
+-          );
++          borderItems.push({
++            width: cell.borders.right.width,
++            svg: `<line x1="${x + cellW}" y1="${y}" x2="${x + cellW}" y2="${y + cellH}" ${rightResult.attrs}/>`
++          });
+         }
+       }
+       if (cell.textBody) {
+@@ -18259,7 +18270,7 @@
+         };
+         const textSvg = renderTextBody(cell.textBody, cellTransform, context);
+         if (textSvg) {
+-          parts.push(`<g transform="translate(${x}, ${y})">${textSvg}</g>`);
++          textParts.push(`<g transform="translate(${x}, ${y})">${textSvg}</g>`);
+         }
+       }
+       x += colWidths[colIdx] ?? 0;
+@@ -18267,7 +18278,8 @@
+     }
+     y += rowH;
+   }
+-  parts.push("</g>");
++  borderItems.sort((a, b) => a.width - b.width);
++  parts.push(...fillParts, ...borderItems.map((item) => item.svg), ...textParts, "</g>");
+   return { content: parts.join(""), defs };
+ }
+ function computeSpannedSize(sizes, startIdx, span) {
