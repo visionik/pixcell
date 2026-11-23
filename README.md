@@ -78,7 +78,7 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 | `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Live |
 | `pixcell[mermaid]` | Mermaid diagrams (Pele via `quickjs-ng`, rasterised via `resvg-py`) | Live |
 | `pixcell[pptx]` | PowerPoint decks | Coming |
-| `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Coming |
+| `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Live |
 | `pixcell[all]` | All available extras | Live |
 
 ## Notes
