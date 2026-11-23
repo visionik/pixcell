@@ -11,7 +11,14 @@ import os
 from collections.abc import Iterable
 from typing import Any
 
-from pixcell.docs.errors import DocsError, DocumentTooLarge, MissingExtra, UnsupportedType
+from pixcell.docs.errors import (
+    DocsError,
+    DocumentTooLarge,
+    InstallHint,
+    MissingExtra,
+    UnsupportedType,
+    set_install_hint,
+)
 from pixcell.docs.registry import (
     Registry,
     Renderer,
@@ -48,6 +55,7 @@ __all__ = [
     "register",
     "renderers",
     "resolve",
+    "set_install_hint",
     "sniff_mime",
     "supports",
     "unregister",
