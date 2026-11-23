@@ -109,7 +109,7 @@ def _sniff_zip_mime(header: bytes, path: Path | None) -> str:
         try:
             with zipfile.ZipFile(path) as archive:
                 names = set(archive.namelist())
-                if "mimetype" in names:
+                if "mimetype" in names and archive.getinfo("mimetype").file_size <= 256:
                     try:
                         mime = archive.read("mimetype").decode("ascii", errors="ignore").strip()
                         if mime == "application/epub+zip":
@@ -177,6 +177,7 @@ def _call_renderer(
     fn: RendererCallable,
     path: Path,
     *,
+    max_bytes: int | None,
     max_pages: int | None,
     options: dict[str, Any],
 ) -> Document:
@@ -191,6 +192,8 @@ def _call_renderer(
         )
         if "max_pages" in sig.parameters or accepts_kwargs:
             call_kwargs.setdefault("max_pages", max_pages)
+        if "max_bytes" in sig.parameters:
+            call_kwargs.setdefault("max_bytes", max_bytes)
     else:
         call_kwargs.setdefault("max_pages", max_pages)
     return fn(path, **call_kwargs)
@@ -368,7 +371,13 @@ class Registry:
 
         try:
             fn = renderer.resolve_loader()
-            document = _call_renderer(fn, target, max_pages=max_pages, options=options)
+            document = _call_renderer(
+                fn,
+                target,
+                max_bytes=max_bytes,
+                max_pages=max_pages,
+                options=options,
+            )
         except MissingExtra:
             raise
         except ImportError as exc:
@@ -445,6 +454,28 @@ def _default_registry() -> Registry:
             suffixes=(".pdf",),
             mime_types=("application/pdf",),
             extra="pdf",
+        )
+    )
+    # Built-in EPUB renderer (stdlib zipfile + xml.etree; returns self-contained HTML).
+    registry.register(
+        Renderer(
+            name="epub",
+            loader="pixcell.docs.epub:render",
+            suffixes=(".epub",),
+            mime_types=("application/epub+zip",),
+            extra=None,
+        )
+    )
+    # DOCX renderer (converts Word documents to HTML via mammoth with pip install "pixcell[docx]").
+    registry.register(
+        Renderer(
+            name="docx",
+            loader="pixcell.docs.docx:render",
+            suffixes=(".docx",),
+            mime_types=(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            extra="docx",
         )
     )
     return registry

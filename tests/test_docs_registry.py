@@ -35,11 +35,16 @@ def test_importing_pixcell_docs_does_not_import_optional_backends():
         "assert docs.supports('photo.png')\n"
         "assert docs.supports('diagram.svg')\n"
         "assert docs.supports('report.pdf')\n"
-        "assert len(docs.renderers()) >= 3\n"
+        "assert docs.supports('novel.epub')\n"
+        "assert docs.supports('memo.docx')\n"
+        "assert len(docs.renderers()) >= 5\n"
         "assert 'resvg_py' not in sys.modules\n"
         "assert 'pixcell.docs.svg' not in sys.modules\n"
         "assert 'pypdfium2' not in sys.modules\n"
         "assert 'pixcell.docs.pdf' not in sys.modules\n"
+        "assert 'mammoth' not in sys.modules\n"
+        "assert 'pixcell.docs.docx' not in sys.modules\n"
+        "assert 'pixcell.docs.epub' not in sys.modules\n"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr or proc.stdout
