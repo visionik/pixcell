@@ -478,6 +478,16 @@ def _default_registry() -> Registry:
             extra="docx",
         )
     )
+    # Mermaid renderer (renders diagrams to SVG via Pele in QuickJS with pip install "pixcell[mermaid]").
+    registry.register(
+        Renderer(
+            name="mermaid",
+            loader="pixcell.docs.mermaid:render",
+            suffixes=(".mmd", ".mermaid"),
+            mime_types=("text/vnd.mermaid",),
+            extra="mermaid",
+        )
+    )
     return registry
 
 
