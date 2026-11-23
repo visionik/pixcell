@@ -65,7 +65,7 @@ def test_policy_offline_allows_only_file_and_data(tmp_path: Path):
         "about:version",
         "javascript:alert(1)",
         sibling_page,
-        Path("/etc/hosts").as_uri(),
+        Path(Path.cwd().anchor, "etc", "hosts").as_uri(),
         "file://evil.example/share/a.html",
     ):
         assert not offline(blocked), blocked
@@ -86,7 +86,7 @@ def test_policy_localhost_mode(tmp_path: Path):
     assert local((tmp_path / "a.html").as_uri())
     assert not local("https://example.com")
     assert not local("data:text/html,hi")
-    assert not local(Path("/etc/hosts").as_uri())
+    assert not local(Path(Path.cwd().anchor, "etc", "hosts").as_uri())
 
 
 def test_host_of_and_file_path(tmp_path: Path):

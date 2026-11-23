@@ -851,7 +851,7 @@ def test_headless_no_network_passes_offline_flags_and_blocks_http(tmp_path: Path
         with pytest.raises(BrowserError, match="blocked by URL policy"):
             browser.navigate("http://localhost:8000")
         with pytest.raises(BrowserError, match="blocked by URL policy"):
-            browser.navigate(Path("/etc/hosts").as_uri())
+            browser.navigate(Path(Path.cwd().anchor, "etc", "hosts").as_uri())
     finally:
         browser.close()
 
