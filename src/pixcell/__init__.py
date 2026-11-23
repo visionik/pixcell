@@ -8,6 +8,7 @@
 - :mod:`pixcell.textual` — an ``Image`` widget for Textual (``pip install pixcell[textual]``).
 - :mod:`pixcell.live` — ``LiveImage``, a Textual widget you keep pushing frames into.
 - :mod:`pixcell.docs` — open images, SVGs, and documents into displayable outputs.
+- :mod:`pixcell.browser` — headless Chromium over CDP and a live Textual ``BrowserView`` widget.
 """
 
 __version__ = "0.5.0"

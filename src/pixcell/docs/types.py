@@ -22,6 +22,9 @@ from typing import TYPE_CHECKING, Self, overload
 if TYPE_CHECKING:
     from PIL.Image import Image
 
+    from pixcell.browser.cdp import Browser
+    from pixcell.browser.view import BrowserView
+
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 """Default maximum file size (50 MiB) accepted by :func:`pixcell.docs.open`."""
 
@@ -248,6 +251,52 @@ class HTML:
         if isinstance(self.base, Path):
             return self.base.resolve().as_uri()
         return self.base
+
+    def open_browser(
+        self,
+        *,
+        size: tuple[int, int] = (1280, 800),
+        executable: str | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
+        start: bool = True,
+    ) -> Browser:
+        """Open this HTML document in a headless :class:`~pixcell.browser.Browser` under the
+        no-network policy (writes to a private temp file and loads ``file://``)."""
+        from pixcell.browser.cdp import open_html
+
+        return open_html(
+            self,
+            size=size,
+            executable=executable,
+            cache_dir=cache_dir,
+            start=start,
+        )
+
+    def to_browser_view(
+        self,
+        *,
+        executable: str | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
+        show_bar: bool = True,
+        allow_halfblock: bool = False,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+    ) -> BrowserView:
+        """Create a Textual :class:`~pixcell.browser.BrowserView` for this HTML document
+        under the no-network policy (requires ``pixcell[textual]``)."""
+        from pixcell.browser.view import BrowserView
+
+        return BrowserView.from_html(
+            self,
+            executable=executable,
+            cache_dir=cache_dir,
+            show_bar=show_bar,
+            allow_halfblock=allow_halfblock,
+            name=name,
+            id=id,
+            classes=classes,
+        )
 
     def close(self) -> None:
         pass

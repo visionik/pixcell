@@ -83,6 +83,49 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 
 Known `pixcell[pptx]` fidelity gaps (upstream `pptx-glimpse` in no-fonts mode): autoshape text colour (`fontRef` scheme colour) can render black, bullet glyphs render small, built-in table styles without embedded definitions fall back to plain grid lines, pie chart data labels are omitted, and EMF/WMF pictures fall back to a per-slide placeholder.
 
+## Browser
+
+`pixcell.browser` (ported from `deftai/console`) drives a headless Chromium-family browser over CDP (`--remote-debugging-pipe`, stdlib-only) for screenshots, JavaScript evaluation, offline `pixcell.docs.HTML` rendering, and an interactive Textual `BrowserView` widget (`pip install pixcell[textual]`). If no Chromium browser is installed, `pixcell.browser.install()` downloads Google's Chrome headless shell into pixcell's user cache directory (`PIXCELL_BROWSER_CACHE_DIR` or `set_cache_dir()`).
+
+Headless use (no Textual needed):
+
+```python
+from pixcell.browser import Browser, Policy
+
+with Browser(policy=Policy(allow_hosts=frozenset({"example.com"}))) as browser:
+    browser.navigate("https://example.com")
+    title = browser.eval("document.title")
+    image = browser.screenshot()          # PIL.Image.Image
+    png = browser.screenshot(format="png")  # PNG bytes
+```
+
+Opening a `pixcell.docs` `HTML` document under the no-network policy (`file://` and `data:` only):
+
+```python
+import pixcell.browser
+import pixcell.docs
+
+doc = pixcell.docs.open("novel.epub")     # or memo.docx, budget.xlsx
+with pixcell.browser.open_html(doc) as browser:
+    page = browser.screenshot()           # PIL.Image.Image, rendered offline
+```
+
+Live interactive browser in Textual (`pip install pixcell[textual]`):
+
+```python
+import pixcell.textual
+from textual.app import App
+from pixcell.browser import BrowserView
+
+pixcell.textual.configure()   # probe the terminal before the app starts
+
+class BrowserApp(App):
+    def compose(self):
+        yield BrowserView("https://example.com")
+
+BrowserApp().run()
+```
+
 ## Notes
 
 - What each terminal really does comes from [terminal-facts](https://github.com/visionik/terminal-facts),
