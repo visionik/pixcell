@@ -61,6 +61,8 @@ doc = pixcell.docs.open("diagram.svg")       # SVG(svg=..., width=..., height=..
 picture = doc.to_picture(background="#fff")  # Picture with lazy pages (needs pixcell[svg])
 first_page = picture.pages[0]                # PIL.Image.Image
 pdf = pixcell.docs.open("report.pdf")        # Picture with lazy pages (needs pixcell[pdf])
+book = pixcell.docs.open("novel.epub")       # HTML(html=..., title=...) (built-in)
+word = pixcell.docs.open("memo.docx")        # HTML(html=..., title=...) (needs pixcell[docx])
 ```
 
 Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) work out of the box via Pillow. Guard rails default to `max_bytes=50 MiB` and `max_pages=200`.
@@ -70,8 +72,8 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 | *(built-in)* | PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, QOI | Live |
 | `pixcell[svg]` | SVG (rasterised via `resvg-py`) | Live |
 | `pixcell[pdf]` | PDF (`pypdfium2`) | Live |
-| *(built-in)* | EPUB (stdlib `zipfile`, XHTML out) | Coming |
-| `pixcell[docx]` | Word documents (`mammoth`) | Coming |
+| *(built-in)* | EPUB (stdlib `zipfile`, XHTML out) | Live |
+| `pixcell[docx]` | Word documents (`mammoth`) | Live |
 | `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Coming |
 | `pixcell[mermaid]` | Mermaid diagrams | Coming |
 | `pixcell[pptx]` | PowerPoint decks | Coming |
