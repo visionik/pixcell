@@ -63,7 +63,7 @@ first_page = picture.pages[0]                # PIL.Image.Image
 pdf = pixcell.docs.open("report.pdf")        # Picture with lazy pages (needs pixcell[pdf])
 book = pixcell.docs.open("novel.epub")       # HTML(html=..., title=...) (built-in)
 word = pixcell.docs.open("memo.docx")        # HTML(html=..., title=...) (needs pixcell[docx])
-deck = pixcell.docs.open("slides.pptx")      # Picture with lazy SVG-backed slides (needs pixcell[pptx])
+sheet = pixcell.docs.open("budget.xlsx")     # HTML(html=..., title=...) (needs pixcell[xlsx])
 ```
 
 Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) work out of the box via Pillow. Guard rails default to `max_bytes=50 MiB` and `max_pages=200`.
@@ -75,10 +75,10 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 | `pixcell[pdf]` | PDF (`pypdfium2`) | Live |
 | *(built-in)* | EPUB (stdlib `zipfile`, XHTML out) | Live |
 | `pixcell[docx]` | Word documents (`mammoth`) | Live |
-| `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Coming |
-| `pixcell[mermaid]` | Mermaid diagrams | Coming |
+| `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Live |
+| `pixcell[mermaid]` | Mermaid diagrams (Pele via `quickjs-ng`, rasterised via `resvg-py`) | Live |
 | `pixcell[pptx]` | PowerPoint decks (`quickjs-ng` + bundled `pptx-glimpse` + `resvg-py`) | Live |
-| `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Coming |
+| `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Live |
 | `pixcell[all]` | All available extras | Live |
 
 Known `pixcell[pptx]` fidelity gaps (upstream `pptx-glimpse` in no-fonts mode): autoshape text colour (`fontRef` scheme colour) can render black, bullet glyphs render small, built-in table styles without embedded definitions fall back to plain grid lines, pie chart data labels are omitted, and EMF/WMF pictures fall back to a per-slide placeholder.

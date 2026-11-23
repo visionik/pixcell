@@ -5,7 +5,9 @@ from __future__ import annotations
 import builtins
 import importlib
 import inspect
+import json
 import os
+import re
 import struct
 import zipfile
 from collections.abc import Callable, Iterable
@@ -27,6 +29,7 @@ RendererLoader = RendererCallable | str
 Sniffer = Callable[[bytes, Path], bool]
 
 _SNIFF_BYTES = 4096
+_EXCALIDRAW_TYPE_RE = re.compile(rb'"type"\s*:\s*"excalidraw"')
 _BMP_DIB_SIZES = frozenset({12, 40, 52, 56, 108, 124})
 _NETPBM_MAGIC = (b"P1", b"P2", b"P3", b"P4", b"P5", b"P6")
 _OOXML_MARKERS: tuple[tuple[str, str], ...] = (
@@ -124,6 +127,28 @@ def _sniff_zip_mime(header: bytes, path: Path | None) -> str:
     return "application/zip"
 
 
+def _sniff_excalidraw(stripped: bytes, path: Path | None) -> bool:
+    """Return True if JSON bytes look like an Excalidraw scene (``"type": "excalidraw"``)."""
+    try:
+        parsed = json.loads(stripped.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        if _EXCALIDRAW_TYPE_RE.search(stripped):
+            return True
+        if path is not None:
+            try:
+                size = path.stat().st_size
+                if size > len(stripped):
+                    with builtins.open(path, "rb") as stream:
+                        stream.seek(max(0, size - _SNIFF_BYTES))
+                        tail = stream.read(_SNIFF_BYTES)
+                    if _EXCALIDRAW_TYPE_RE.search(tail):
+                        return True
+            except OSError:
+                pass
+        return False
+    return isinstance(parsed, dict) and parsed.get("type") == "excalidraw"
+
+
 def sniff_mime(header: bytes, path: Path | None = None) -> str | None:
     """Identify common document and image formats from leading magic bytes."""
     if not header:
@@ -162,6 +187,8 @@ def sniff_mime(header: bytes, path: Path | None = None) -> str | None:
         return "image/svg+xml"
     if lower.startswith((b"<!doctype html", b"<html")):
         return "text/html"
+    if stripped.startswith(b"{") and _sniff_excalidraw(stripped, path):
+        return "application/vnd.excalidraw+json"
     return None
 
 
@@ -476,6 +503,39 @@ def _default_registry() -> Registry:
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ),
             extra="docx",
+        )
+    )
+    # XLSX renderer (converts spreadsheets to HTML tables via openpyxl with pip install "pixcell[xlsx]").
+    registry.register(
+        Renderer(
+            name="xlsx",
+            loader="pixcell.docs.xlsx:render",
+            suffixes=(".xlsx", ".xlsm"),
+            mime_types=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel.sheet.macroenabled.12",
+            ),
+            extra="xlsx",
+        )
+    )
+    # Mermaid renderer (renders diagrams to SVG via Pele in QuickJS with pip install "pixcell[mermaid]").
+    registry.register(
+        Renderer(
+            name="mermaid",
+            loader="pixcell.docs.mermaid:render",
+            suffixes=(".mmd", ".mermaid"),
+            mime_types=("text/vnd.mermaid",),
+            extra="mermaid",
+        )
+    )
+    # Excalidraw renderer (own JSON-to-SVG converter; rasterises via pip install "pixcell[svg]").
+    registry.register(
+        Renderer(
+            name="excalidraw",
+            loader="pixcell.docs.excalidraw:render",
+            suffixes=(".excalidraw", ".excalidraw.json"),
+            mime_types=("application/vnd.excalidraw+json",),
+            extra="svg",
         )
     )
     # PPTX renderer (bundled pptx-glimpse in QuickJS + resvg-py with pip install "pixcell[pptx]").
