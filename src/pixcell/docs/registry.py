@@ -437,6 +437,16 @@ def _default_registry() -> Registry:
             extra="svg",
         )
     )
+    # PDF renderer (rasterises pages lazily via pypdfium2 with pip install "pixcell[pdf]").
+    registry.register(
+        Renderer(
+            name="pdf",
+            loader="pixcell.docs.pdf:render",
+            suffixes=(".pdf",),
+            mime_types=("application/pdf",),
+            extra="pdf",
+        )
+    )
     return registry
 
 
