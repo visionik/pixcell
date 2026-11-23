@@ -18,6 +18,27 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from urllib.parse import unquote
 
+
+def _path_from_uri(uri: str) -> Path:
+    """``Path.from_uri`` (Python 3.13+), with the same rules on 3.11 and 3.12."""
+    if hasattr(Path, "from_uri"):
+        return Path.from_uri(uri)
+    from urllib.parse import urlsplit
+    from urllib.request import url2pathname
+
+    parts = urlsplit(uri)
+    if parts.scheme.lower() != "file":
+        raise ValueError(f"URI does not start with 'file:': {uri!r}")
+    if parts.netloc and parts.netloc.lower() != "localhost":
+        if sys.platform != "win32":
+            raise ValueError(f"URI is not local: {uri!r}")
+        path = Path("\\\\" + parts.netloc + url2pathname(parts.path))
+    else:
+        path = Path(url2pathname(parts.path))
+    if not path.is_absolute():
+        raise ValueError(f"URI is not absolute: {uri!r}")
+    return path
+
 if sys.platform == "win32":
     import msvcrt
 
@@ -34,7 +55,7 @@ if sys.platform == "win32":
         rest = uri[len("file://") :]
         if uri[: len("file://")].lower() == "file://" and re.match(r"[a-zA-Z]:[\\/]", rest):
             return Path(unquote(rest))
-        path = Path.from_uri(uri)
+        path = _path_from_uri(uri)
         if str(path).startswith("\\\\"):
             raise ValueError(f"refusing remote UNC file URI: {uri}")
         return path
@@ -155,7 +176,7 @@ else:
     def path_from_file_uri(uri: str) -> Path:
         """The local path a ``file:`` URI names (``file:///a%20b`` is ``/a b``). ValueError if
         it doesn't name an absolute local path."""
-        return Path.from_uri(uri)
+        return _path_from_uri(uri)
 
     def browser_locations() -> list[Path]:
         """Where Chromium-family browsers are installed outside the PATH (macOS app bundles)."""
