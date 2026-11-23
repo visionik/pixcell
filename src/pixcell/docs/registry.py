@@ -478,6 +478,19 @@ def _default_registry() -> Registry:
             extra="docx",
         )
     )
+    # XLSX renderer (converts spreadsheets to HTML tables via openpyxl with pip install "pixcell[xlsx]").
+    registry.register(
+        Renderer(
+            name="xlsx",
+            loader="pixcell.docs.xlsx:render",
+            suffixes=(".xlsx", ".xlsm"),
+            mime_types=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel.sheet.macroenabled.12",
+            ),
+            extra="xlsx",
+        )
+    )
     # Mermaid renderer (renders diagrams to SVG via Pele in QuickJS with pip install "pixcell[mermaid]").
     registry.register(
         Renderer(
