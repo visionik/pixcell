@@ -1,0 +1,282 @@
+--- a/@pptx-glimpse/document/dist/index.js
++++ b/@pptx-glimpse/document/dist/index.js
+@@ -1633,14 +1633,41 @@
+     angle: asOoxmlAngle(numericAttr2(getChild(grad, "lin"), "ang") ?? 0)
+   };
+ }
++function collectAlternateBlipRelationshipIds(blipFill, primaryEmbed) {
++  const ids = [];
++  const pushEmbed = (id) => {
++    if (id !== void 0 && id !== primaryEmbed && !ids.includes(id)) {
++      ids.push(asRelationshipId(id));
++    }
++  };
++  const walkBlipContainer = (node) => {
++    if (!node || typeof node !== "object") return;
++    for (const [key, value] of Object.entries(node)) {
++      if (key.startsWith("@_") || key === "#text") continue;
++      const local = localName(key);
++      const items = Array.isArray(value) ? value : [value];
++      for (const item of items) {
++        if (!item || typeof item !== "object") continue;
++        if (local === "svgBlip" || local === "blip") {
++          pushEmbed(getNamespacedAttr(item, "embed"));
++        }
++        walkBlipContainer(item);
++      }
++    }
++  };
++  walkBlipContainer(blipFill);
++  return ids;
++}
+ function parseBlipFill(blipFill) {
+   const blip = getChild(blipFill, "blip");
+-  const embed = getNamespacedAttr(blip, "embed");
++  const alternateBlipRelationshipIds = collectAlternateBlipRelationshipIds(blipFill, getNamespacedAttr(blip, "embed"));
++  const embed = getNamespacedAttr(blip, "embed") ?? alternateBlipRelationshipIds[0];
+   if (embed === void 0) return void 0;
+   const tile = parseImageFillTile(getChild(blipFill, "tile"));
+   return {
+     kind: "image",
+     blipRelationshipId: asRelationshipId(embed),
++    ...alternateBlipRelationshipIds.length > 0 ? { alternateBlipRelationshipIds } : {},
+     ...tile !== void 0 ? { tile } : {}
+   };
+ }
+@@ -2771,7 +2798,9 @@
+   const placeholder = parsePlaceholderChild(getChild(nvPicPr, "nvPr"));
+   const blipFill = getChild(pic, "blipFill");
+   const blip = getChild(blipFill, "blip");
+-  const embed = getNamespacedAttr(blip, "embed");
++  const primaryEmbed = getNamespacedAttr(blip, "embed");
++  const alternateBlipRelationshipIds = collectAlternateBlipRelationshipIds(blipFill, primaryEmbed);
++  const embed = primaryEmbed ?? alternateBlipRelationshipIds[0];
+   const crop = parseCrop(getChild(blipFill, "srcRect"));
+   const stretchNode = getChild(blipFill, "stretch");
+   const tileNode = getChild(blipFill, "tile");
+@@ -2798,6 +2827,7 @@
+     ...name !== void 0 ? { name } : {},
+     ...transform !== void 0 ? { transform } : {},
+     ...embed !== void 0 ? { blipRelationshipId: asRelationshipId(embed) } : {},
++    ...alternateBlipRelationshipIds.length > 0 ? { alternateBlipRelationshipIds } : {},
+     ...crop !== void 0 ? { crop } : {},
+     ...blipFillMode !== void 0 ? { blipFillMode } : {},
+     ...stretch !== void 0 ? { stretch } : {},
+@@ -15396,10 +15426,67 @@
+     ...match !== void 0 ? { placeholderMatch: match } : {}
+   };
+ }
++function isMetafileMime(contentType) {
++  if (contentType === void 0) return false;
++  const lower = contentType.toLowerCase();
++  return lower === "image/emf" || lower === "image/x-emf" || lower === "image/wmf" || lower === "image/x-wmf" || lower === "application/x-msmetafile" || lower === "application/emf" || lower === "application/x-emf" || lower === "application/wmf" || lower === "application/x-wmf";
++}
++function isPreferredNonMetafileMime(contentType) {
++  if (contentType === void 0 || isMetafileMime(contentType)) return false;
++  return contentType.toLowerCase().startsWith("image/");
++}
++function collectEmbedIdsFromRawNode(rawNode, out) {
++  if (!rawNode || typeof rawNode !== "object") return;
++  const local = localName(rawNode.name ?? "");
++  if ((local === "blip" || local === "svgBlip") && rawNode.attributes) {
++    for (const [attrName, attrVal] of Object.entries(rawNode.attributes)) {
++      if ((attrName === "embed" || attrName.endsWith(":embed")) && typeof attrVal === "string" && !out.includes(attrVal)) {
++        out.push(attrVal);
++      }
++    }
++  }
++  for (const child of rawNode.children ?? []) {
++    collectEmbedIdsFromRawNode(child, out);
++  }
++}
++function resolveBestImageRelationship(partRelationships, primaryId, alternateIds, rawSidecars) {
++  const primary = primaryId !== void 0 ? partRelationships.find(
++    (rel2) => rel2.id === primaryId && rel2.type === IMAGE_REL_TYPE2
++  ) : void 0;
++  if (primary?.media !== void 0 && !isMetafileMime(primary.media.contentType)) {
++    return primary;
++  }
++  const candidateIds = [...alternateIds ?? []];
++  for (const sidecar of rawSidecars ?? []) {
++    if (localName(sidecar.node?.name ?? "") === "AlternateContent") {
++      collectEmbedIdsFromRawNode(sidecar.node, candidateIds);
++    }
++  }
++  for (const candId of candidateIds) {
++    const altRel = partRelationships.find(
++      (rel2) => String(rel2.id) === String(candId) && rel2.type === IMAGE_REL_TYPE2
++    );
++    if (altRel?.media !== void 0 && isPreferredNonMetafileMime(altRel.media.contentType)) {
++      return altRel;
++    }
++  }
++  if (primary?.media !== void 0) return primary;
++  for (const candId of candidateIds) {
++    const anyRel = partRelationships.find(
++      (rel2) => String(rel2.id) === String(candId) && rel2.type === IMAGE_REL_TYPE2 && rel2.media !== void 0
++    );
++    if (anyRel !== void 0) return anyRel;
++  }
++  return primary;
++}
+ function computeImageElement(context, image, layer, partPath) {
+   const match = slidePlaceholderMatch(context, image, layer);
+-  const relationship = resolveComputedRelationships(context.source, partPath).find(
+-    (rel2) => rel2.id === image.blipRelationshipId && rel2.type === IMAGE_REL_TYPE2
++  const partRelationships = resolveComputedRelationships(context.source, partPath);
++  const relationship = resolveBestImageRelationship(
++    partRelationships,
++    image.blipRelationshipId,
++    image.alternateBlipRelationshipIds,
++    image.rawSidecars
+   );
+   const effects = image.effects !== void 0 ? computeEffectList(context, image.effects) : void 0;
+   const blipEffects = image.blipEffects !== void 0 ? computeBlipEffects(context, image.blipEffects) : void 0;
+@@ -16134,8 +16221,11 @@
+         }
+       };
+     case "image": {
+-      const relationship = resolveComputedRelationships(context.source, partPath).find(
+-        (rel2) => rel2.id === fill.blipRelationshipId && rel2.type === IMAGE_REL_TYPE2
++      const relationship = resolveBestImageRelationship(
++        resolveComputedRelationships(context.source, partPath),
++        fill.blipRelationshipId,
++        fill.alternateBlipRelationshipIds,
++        void 0
+       );
+       return {
+         kind: "image",
+@@ -17356,18 +17446,52 @@
+   return override?.partName;
+ }
+ var MEDIA_CONTENT_TYPE_PREFIXES = ["image/", "audio/", "video/"];
++var EXTRA_MEDIA_CONTENT_TYPES = /* @__PURE__ */ new Set([
++  "application/x-msmetafile",
++  "application/emf",
++  "application/x-emf",
++  "application/wmf",
++  "application/x-wmf"
++]);
++var EXTENSION_MEDIA_FALLBACK = {
++  png: "image/png",
++  jpg: "image/jpeg",
++  jpeg: "image/jpeg",
++  gif: "image/gif",
++  bmp: "image/bmp",
++  tif: "image/tiff",
++  tiff: "image/tiff",
++  svg: "image/svg+xml",
++  webp: "image/webp",
++  ico: "image/x-icon",
++  emf: "image/emf",
++  wmf: "image/wmf"
++};
+ function isMediaContentType(contentType) {
+-  return MEDIA_CONTENT_TYPE_PREFIXES.some((prefix) => contentType.startsWith(prefix));
++  const lower = contentType.toLowerCase();
++  return MEDIA_CONTENT_TYPE_PREFIXES.some((prefix) => lower.startsWith(prefix)) || EXTRA_MEDIA_CONTENT_TYPES.has(lower);
++}
++function normalizeResolvedMediaContentType(path, contentType) {
++  const ext = extensionOf(path)?.toLowerCase();
++  const lower = contentType.toLowerCase();
++  if (lower === "application/x-msmetafile") {
++    return ext === "wmf" ? "image/wmf" : "image/emf";
++  }
++  if (lower === "application/emf" || lower === "application/x-emf") return "image/emf";
++  if (lower === "application/wmf" || lower === "application/x-wmf") return "image/wmf";
++  return contentType;
+ }
+ function resolveContentType(path, defaults, overrides) {
+   const override = overrides.find((entry) => entry.partName === path);
+-  if (override !== void 0) return override.contentType;
++  if (override !== void 0) return normalizeResolvedMediaContentType(path, override.contentType);
+   const extension = extensionOf(path);
+   if (extension !== void 0) {
+     const fallback = defaults.find(
+       (entry) => entry.extension.toLowerCase() === extension.toLowerCase()
+     );
+-    if (fallback !== void 0) return fallback.contentType;
++    if (fallback !== void 0) return normalizeResolvedMediaContentType(path, fallback.contentType);
++    const extMime = EXTENSION_MEDIA_FALLBACK[extension.toLowerCase()];
++    if (extMime !== void 0) return extMime;
+   }
+   return "application/octet-stream";
+ }
+--- a/pptx-glimpse/dist/chunk-HYCC6Y6P.js
++++ b/pptx-glimpse/dist/chunk-HYCC6Y6P.js
+@@ -13193,6 +13193,7 @@
+   64,
+   67,
+   68,
++  70,
+   75,
+   81,
+   82,
+@@ -15961,11 +15962,15 @@
+ }
+ function renderImageMedia(image, x, y, width, height, extraAttributes = {}, inlineSvg = false, idNamespace = "") {
+   if (inlineSvg && image.mimeType === "image/svg+xml") {
+-    return inlineSvgData(
+-      image.imageData,
+-      { x, y, width, height, preserveAspectRatio: "none", ...extraAttributes },
+-      idNamespace
+-    );
++    try {
++      return inlineSvgData(
++        image.imageData,
++        { x, y, width, height, preserveAspectRatio: "none", ...extraAttributes },
++        idNamespace
++      );
++    } catch {
++      return renderPlaceholder("image/emf", width, height, `translate(${x}, ${y})`);
++    }
+   }
+   const extra = Object.entries(extraAttributes).map(([name, value]) => ` ${name}="${String(value)}"`).join("");
+   return `<image${extra} href="data:${image.mimeType};base64,${image.imageData}" x="${x}" y="${y}" width="${width}" height="${height}" preserveAspectRatio="none"/>`;
+@@ -15999,7 +16004,7 @@
+   return [
+     `<g transform="${transformAttr}">`,
+     `<rect width="${w}" height="${h}" fill="#E0E0E0" stroke="#BDBDBD" stroke-width="1"/>`,
+-    `<text x="${w / 2}" y="${h / 2}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" fill="#757575" font-family="sans-serif">${label}</text>`,
++    `<text x="${w / 2}" y="${h / 2}" text-anchor="middle" dominant-baseline="central" font-size="${fontSize}" fill="#757575" font-family="Calibri, Carlito, Arial, sans-serif">${label}</text>`,
+     `</g>`
+   ].join("");
+ }
+@@ -18634,11 +18639,17 @@
+   const rawNode = element.sourceNode.raw.node;
+   const oleObject = findDescendant(rawNode, "oleObj");
+   if (oleObject === void 0) return { kind: "not-ole" };
+-  const picture = childByLocalName(oleObject, "pic");
++  const picture = childByLocalName(oleObject, "pic") ?? findDescendant(oleObject, "pic");
+   const blipFill = childByLocalName(picture, "blipFill");
+   const blip = childByLocalName(blipFill, "blip");
+-  const relationshipId = blip?.attributes?.["r:embed"];
+-  const relationship = relationshipId ? slide.relationships.find((candidate) => String(candidate.id) === relationshipId) : void 0;
++  const svgBlip = findDescendant(blipFill, "svgBlip");
++  const primaryId = blip?.attributes?.["r:embed"];
++  const altId = svgBlip?.attributes?.["r:embed"];
++  const primaryRel = primaryId ? slide.relationships.find((candidate) => String(candidate.id) === primaryId) : void 0;
++  const altRel = altId ? slide.relationships.find((candidate) => String(candidate.id) === altId) : void 0;
++  const primaryCt = primaryRel?.media?.contentType?.toLowerCase() ?? "";
++  const primaryIsMeta = primaryCt.includes("emf") || primaryCt.includes("wmf") || primaryCt.includes("msmetafile");
++  const relationship = primaryIsMeta && altRel?.media !== void 0 ? altRel : primaryRel ?? altRel;
+   if (picture === void 0 || relationship?.media === void 0) {
+     pushAdapterWarning(
+       diagnostics,
+@@ -19315,9 +19326,16 @@
+       return contentType;
+     case "image/jpg":
+       return "image/jpeg";
++    case "image/emf":
+     case "image/x-emf":
++    case "application/emf":
++    case "application/x-emf":
++    case "application/x-msmetafile":
+       return "image/emf";
++    case "image/wmf":
+     case "image/x-wmf":
++    case "application/wmf":
++    case "application/x-wmf":
+       return "image/wmf";
+     default:
+       pushAdapterWarning(

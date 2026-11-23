@@ -33,8 +33,9 @@ Third-party software notices for src/pixcell/docs/vendor/pptx-glimpse.global.min
 ====================================================================================
 
 This directory vendors a minified browser-targeted IIFE bundle of pptx-glimpse
-built with esbuild for execution inside QuickJS (quickjs-ng). Every bundled
-package is licensed under the MIT License:
+built with esbuild for execution inside QuickJS (quickjs-ng), with local
+fidelity patches from tools/pptx-glimpse/patches/ applied at build time. Every
+bundled package is licensed under the MIT License:
 
 1. pptx-glimpse 5.3.1
    License: MIT

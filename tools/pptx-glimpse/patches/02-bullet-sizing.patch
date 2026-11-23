@@ -1,0 +1,147 @@
+--- a/@pptx-glimpse/document/dist/index.js
++++ b/@pptx-glimpse/document/dist/index.js
+@@ -2264,6 +2264,8 @@
+   const bulletColor = parseColorElement(getChild(pPr, "buClr"));
+   const bulletColorFollowText = hasChild(pPr, "buClrTx");
+   const bulletSizePct = numericAttr2(getChild(pPr, "buSzPct"), "val");
++  const bulletSizePtsRaw = numericAttr2(getChild(pPr, "buSzPts"), "val");
++  const bulletSizeFollowText = hasChild(pPr, "buSzTx");
+   const tabStops = parseTabStops(pPr);
+   const defaultRunProperties = parseRunProperties(getChild(pPr, "defRPr"));
+   const properties = {
+@@ -2279,6 +2281,8 @@
+     ...bulletColor !== void 0 ? { bulletColor } : {},
+     ...bulletColorFollowText ? { bulletColorFollowText: true } : {},
+     ...bulletSizePct !== void 0 ? { bulletSizePct } : {},
++    ...bulletSizePtsRaw !== void 0 ? { bulletSizePts: asPt(bulletSizePtsRaw / 100) } : {},
++    ...bulletSizeFollowText ? { bulletSizeFollowText: true } : {},
+     ...tabStops.length > 0 ? { tabStops } : {},
+     ...defaultRunProperties !== void 0 ? { defaultRunProperties } : {}
+   };
+@@ -15782,9 +15786,9 @@
+     ...local?.marginLeft !== void 0 ? { marginLeft: local.marginLeft } : pickInherited(inherited, "marginLeft"),
+     ...local?.indent !== void 0 ? { indent: local.indent } : pickInherited(inherited, "indent"),
+     ...local?.bullet !== void 0 ? { bullet: local.bullet } : pickInherited(inherited, "bullet"),
+-    ...local?.bulletFont !== void 0 ? { bulletFont: local.bulletFont } : pickInherited(inherited, "bulletFont"),
++    ...resolveInheritedBulletFont(context, local, inherited),
+     ...resolvedBulletColor !== void 0 ? { bulletColor: resolvedBulletColor } : {},
+-    ...local?.bulletSizePct !== void 0 ? { bulletSizePct: local.bulletSizePct } : pickInherited(inherited, "bulletSizePct"),
++    ...resolveInheritedBulletSize(local, inherited),
+     ...local?.tabStops !== void 0 ? { tabStops: local.tabStops } : {}
+   };
+   return Object.keys(merged).length > 0 ? merged : void 0;
+@@ -15834,6 +15838,19 @@
+     picked[key] = value;
+   }
+   return picked;
++}
++function resolveInheritedBulletFont(context, local, inherited) {
++  const raw = local?.bulletFont ?? pickInheritedValue(inherited, "bulletFont");
++  return raw !== void 0 ? { bulletFont: resolveThemeTypeface(context, raw) } : {};
++}
++function resolveInheritedBulletSize(local, inherited) {
++  for (const candidate of [local, ...inherited]) {
++    if (candidate === void 0) continue;
++    if (candidate.bulletSizeFollowText) return {};
++    if (candidate.bulletSizePts !== void 0) return { bulletSizePts: candidate.bulletSizePts };
++    if (candidate.bulletSizePct !== void 0) return { bulletSizePct: candidate.bulletSizePct };
++  }
++  return {};
+ }
+ function pickInheritedValue(inherited, key) {
+   const value = inherited.find((properties) => properties?.[key] !== void 0)?.[key];
+--- a/pptx-glimpse/dist/chunk-HYCC6Y6P.js
++++ b/pptx-glimpse/dist/chunk-HYCC6Y6P.js
+@@ -17262,10 +17262,36 @@
+   }
+   return textElement;
+ }
+-function resolveBulletText(props, autoNumCounters) {
++var SYMBOL_PUA_BULLET_MAP = {
++  61623: "•",
++  61607: "▪",
++  61550: "■",
++  61553: "□",
++  61608: "▫",
++  61558: "❖",
++  61557: "◆",
++  61559: "◆",
++  61656: "➢",
++  61672: "➔",
++  61692: "✓",
++  61691: "✗",
++  61548: "●",
++  61601: "○",
++  61599: "•"
++};
++function isSymbolPuaCodePoint(char) {
++  if (!char) return false;
++  const cp = char.codePointAt(0);
++  return cp !== void 0 && cp >= 61440 && cp <= 61695;
++}
++function resolveBulletText(props, autoNumCounters, mapPuaToUnicode = true) {
+   if (!props.bullet) return null;
+   if (props.bullet.type === "none") return null;
+   if (props.bullet.type === "char") {
++    if (mapPuaToUnicode && isSymbolPuaCodePoint(props.bullet.char)) {
++      const cp = props.bullet.char.codePointAt(0);
++      return SYMBOL_PUA_BULLET_MAP[cp] ?? "•";
++    }
+     return props.bullet.char;
+   }
+   if (props.bullet.type === "autoNum") {
+@@ -17338,12 +17364,22 @@
+   return result;
+ }
+ function buildBulletFontChain(props, runFontFamily, runFontFamilyEa) {
+-  return [props.bulletFont, runFontFamily ?? null, runFontFamilyEa ?? null];
++  const skipSymbolFont = props.bullet?.type === "char" && isSymbolPuaCodePoint(props.bullet.char);
++  return [skipSymbolFont ? null : props.bulletFont, runFontFamily ?? null, runFontFamilyEa ?? null];
++}
++function resolveBulletFontSizePt(props, textFontSizePt, fontScale) {
++  if (props.bulletSizePts !== null && props.bulletSizePts !== void 0) {
++    return props.bulletSizePts * fontScale;
++  }
++  if (props.bulletSizePct !== null && props.bulletSizePct !== void 0) {
++    return textFontSizePt * (props.bulletSizePct / 1e5);
++  }
++  return textFontSizePt;
+ }
+ function buildBulletStyleAttrs(props, textFontSizePt, fontScale, bulletFontChain, context = createLegacyRendererContext(), fallbackColor = null) {
+   const styles = [];
+-  if (props.bulletSizePct !== null) {
+-    const size = textFontSizePt * (props.bulletSizePct / 1e5);
++  const size = Math.round(resolveBulletFontSizePt(props, textFontSizePt, fontScale) * 100) / 100;
++  if (size > 0) {
+     styles.push(`font-size="${size}pt"`);
+   }
+   const fontFamilyValue = buildFontFamilyValue(bulletFontChain, context);
+@@ -17834,10 +17870,7 @@
+   return { svg, width: totalWidth };
+ }
+ function renderBulletAsPath(bulletText, x, y, paraProps, textFontSizePt, fontScale, fontResolver, context, runFontFamily, runFontFamilyEa, fallbackColor = null) {
+-  let bulletFontSize = textFontSizePt;
+-  if (paraProps.bulletSizePct !== null) {
+-    bulletFontSize = textFontSizePt * (paraProps.bulletSizePct / 1e5);
+-  }
++  const bulletFontSize = resolveBulletFontSizePt(paraProps, textFontSizePt, fontScale);
+   const fontSizePx = bulletFontSize * PX_PER_PT;
+   const font = paraProps.bulletFont ? fontResolver.resolveFont(paraProps.bulletFont, null, void 0, context) : fontResolver.resolveFont(runFontFamily ?? null, runFontFamilyEa ?? null, void 0, context);
+   if (!font) return [];
+@@ -17915,7 +17948,7 @@
+     const textStartX = marginLeftPx + paraMarginLeft;
+     const bulletX = textStartX + paraIndent;
+     const effectiveTextWidth = textWidth - paraMarginLeft;
+-    const bulletText = resolveBulletText(para.properties, autoNumCounters);
++    const bulletText = resolveBulletText(para.properties, autoNumCounters, false);
+     const paraFontSizePt = getParagraphFontSize(para, defaultFontSize) * fontScale;
+     const spaceBeforePx = resolveSpacingPx(para.properties.spaceBefore, paraFontSizePt);
+     const paragraphGapPx = Math.max(prevSpaceAfterPx, spaceBeforePx);
+@@ -19090,6 +19123,7 @@
+     bulletFont: properties?.bulletFont ?? null,
+     bulletColor: properties?.bulletColor !== void 0 ? adaptColor(properties.bulletColor) : null,
+     bulletSizePct: properties?.bulletSizePct ?? null,
++    bulletSizePts: properties?.bulletSizePts !== void 0 ? toRendererPt(properties.bulletSizePts) : null,
+     marginLeft: properties?.marginLeft !== void 0 ? toRendererEmu(properties.marginLeft) : null,
+     indent: properties?.indent !== void 0 ? toRendererEmu(properties.indent) : null,
+     tabStops: properties?.tabStops?.map((tab) => ({
