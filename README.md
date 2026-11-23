@@ -83,6 +83,8 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 
 Known `pixcell[pptx]` fidelity gaps (upstream `pptx-glimpse` in no-fonts mode): autoshape text colour (`fontRef` scheme colour) can render black, bullet glyphs render small, built-in table styles without embedded definitions fall back to plain grid lines, pie chart data labels are omitted, and EMF/WMF pictures fall back to a per-slide placeholder.
 
+Embedding apps that vendor `pixcell` can override the install command shown in `MissingExtra` errors (default `pip install "pixcell[<extra>]"`) with `pixcell.docs.set_install_hint(...)` (accepting a `(extra) -> str` callable, a `"{extra}"` format string, or `None` to reset).
+
 ## Notes
 
 - What each terminal really does comes from [terminal-facts](https://github.com/visionik/terminal-facts),
