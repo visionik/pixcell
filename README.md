@@ -76,7 +76,7 @@ Raster images (`png`, `jpg`, `gif`, `webp`, `bmp`, `tiff`, `ico`, `qoi`, ...) wo
 | *(built-in)* | EPUB (stdlib `zipfile`, XHTML out) | Live |
 | `pixcell[docx]` | Word documents (`mammoth`) | Live |
 | `pixcell[xlsx]` | Spreadsheets (`openpyxl`) | Live |
-| `pixcell[mermaid]` | Mermaid diagrams | Coming |
+| `pixcell[mermaid]` | Mermaid diagrams (Pele via `quickjs-ng`, rasterised via `resvg-py`) | Live |
 | `pixcell[pptx]` | PowerPoint decks | Coming |
 | `pixcell[svg]` | Excalidraw drawings (own JSON-to-SVG converter) | Coming |
 | `pixcell[all]` | All available extras | Live |
