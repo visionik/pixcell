@@ -7,6 +7,8 @@
 - :mod:`pixcell.probe` — find out which the terminal supports, and its cell size.
 - :mod:`pixcell.textual` — an ``Image`` widget for Textual (``pip install pixcell[textual]``).
 - :mod:`pixcell.live` — ``LiveImage``, a Textual widget you keep pushing frames into.
+- :mod:`pixcell.shm` - POSIX shared-memory frame pool for local Kitty ``t=s`` transfers.
+- :mod:`pixcell.ttyqueue` - ``TIOCOUTQ`` tty output-queue gating for live frames.
 - :mod:`pixcell.docs` — open images, SVGs, and documents into displayable outputs.
 - :mod:`pixcell.browser` — headless Chromium over CDP and a live Textual ``BrowserView`` widget.
 """

@@ -2,7 +2,8 @@
 
 Asks the terminal directly, on its tty, in one round trip:
 
-- a Kitty graphics query (``a=q``): answered ``OK`` by terminals with Kitty graphics;
+- a Kitty graphics query (``a=q``): answered ``OK`` by terminals with Kitty graphics,
+  plus a local-only shared-memory query (``a=q,t=s``) when POSIX SHM is available;
 - ``XTVERSION`` (``CSI > 0 q``): the terminal's name and version;
 - ``CSI 16 t`` / ``CSI 14 t``: the cell and window size in pixels;
 - iTerm2's ``ReportCellSize``: answered by terminals with iTerm2 inline images;
@@ -40,7 +41,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any
 
-from pixcell import kitty, terminal_facts
+from pixcell import kitty, shm, terminal_facts
 
 PROTOCOLS = ("kitty", "iterm2", "kitty-direct", "sixel", "halfblock", "off", "host")
 """Best first. ``kitty`` draws with Unicode placeholders; ``kitty-direct``, ``iterm2``
@@ -81,12 +82,24 @@ class Capabilities:
     """The terminal's version, if it said."""
     tmux: bool = False
     """Escape codes for the terminal must go through tmux's passthrough."""
+    shm_probed: bool | None = None
+    """Live ``t=s`` SHM probe result: True (OK), False (failed/silent), or None (not probed)."""
 
     def fact(self, key: str, default: Any = None) -> Any:
         """A shared terminal fact about this terminal (``kitty.frame_edit``...), or
         ``default`` when it's unknown (or the terminal is)."""
         found = _facts_for(self.terminal, self.version)
         return found.get(key, default) if found is not None else default
+
+    @property
+    def shm(self) -> bool:
+        """Should local ``LiveImage`` use POSIX shared memory (``t=s``)?
+
+        True only when local (not SSH, not tmux/screen), Kitty placeholders are active,
+        the terminal is not iTerm2, POSIX SHM is available, ``PIXCELL_SHM`` is not opted
+        out, and ``t=s`` is known (``kitty.shm``) or probed to work.
+        """
+        return shm.can_use_shm(self)
 
     @property
     def frame_format(self) -> str:
@@ -141,17 +154,32 @@ def detect(timeout: float = 0.5, tty_path: str = "/dev/tty") -> Capabilities:
     if forced in ("halfblock", "off", "host"):
         return Capabilities(forced, None, environment_name, _budget(environment_name, ""), "PIXCELL_PROTOCOL")
     tmux = bool(os.environ.get("TMUX"))
+    shm_query_id: int | None = None
+    probe_shm_name: str | None = None
     try:
         if os.name == "nt":
             answer, columns, rows, ioctl_pixels = _ask_windows(timeout)
         elif os.name == "posix":
-            answer, columns, rows, ioctl_pixels = _ask(tty_path, timeout, tmux)
+            shm_probe: tuple[int, str] | None = None
+            if shm.is_local(tmux=tmux) and shm.available() and not shm.opted_out():
+                try:
+                    probe_shm_name = shm.create_probe_segment()
+                    shm_query_id = kitty.new_image_id()
+                    shm_probe = (shm_query_id, probe_shm_name)
+                except OSError:
+                    probe_shm_name = None
+                    shm_query_id = None
+            try:
+                answer, columns, rows, ioctl_pixels = _ask(tty_path, timeout, tmux, shm_probe=shm_probe)
+            finally:
+                if probe_shm_name is not None:
+                    shm.unlink_probe_segment(probe_shm_name)
         else:
             return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, f"no way to ask on {os.name}")
     except OSError as error:
         reason = f"no tty ({error.strerror or error})"
         return Capabilities("halfblock", None, environment_name, DEFAULT_BUDGET, reason, tmux=tmux)
-    return capabilities_from(answer, columns, rows, ioctl_pixels, environment_name, tmux, forced)
+    return capabilities_from(answer, columns, rows, ioctl_pixels, environment_name, tmux, forced, shm_query_id=shm_query_id)
 
 
 def capabilities_from(
@@ -162,13 +190,17 @@ def capabilities_from(
     environment_name: str = "",
     tmux: bool = False,
     forced: str = "",
+    *,
+    shm_query_id: int | None = None,
 ) -> Capabilities:
     """Decide from the terminal's answers (separate from the asking, for tests)."""
     name, version = environment_name, ""
     if match := _XTVERSION.search(answer):
         name, version = terminal_facts.parse_xtversion(match.group(1).decode("utf-8", "replace"))
+    ok_ids = {int(match) for match in _GRAPHICS_OK.findall(answer)}
+    shm_probed = (shm_query_id in ok_ids) if shm_query_id is not None else None
     supported = set()
-    if _GRAPHICS_OK.search(answer):
+    if ok_ids:
         supported.add("kitty-direct")
         if _placeholders(name, version):
             supported.add("kitty")
@@ -187,20 +219,20 @@ def capabilities_from(
         if not usable:
             reason = (
                 "inside tmux: the terminal outside didn't answer (set -g allow-passthrough on?)"
-                if not _GRAPHICS_OK.search(answer)
+                if not ok_ids
                 else f"inside tmux, and {name or 'the terminal'} has no Kitty placeholders"
             )
-            return Capabilities("halfblock", cell, name, budget, reason, frozenset(supported), version, tmux)
+            return Capabilities("halfblock", cell, name, budget, reason, frozenset(supported), version, tmux, shm_probed)
         supported_here = usable
     else:
         supported_here = supported
     if forced in PROTOCOLS:
-        return Capabilities(forced, cell, name, budget, "PIXCELL_PROTOCOL", frozenset(supported), version, tmux)
+        return Capabilities(forced, cell, name, budget, "PIXCELL_PROTOCOL", frozenset(supported), version, tmux, shm_probed)
     for protocol in PROTOCOLS:
         if protocol in supported_here:
-            return Capabilities(protocol, cell, name, budget, _why(protocol, name), frozenset(supported), version, tmux)
+            return Capabilities(protocol, cell, name, budget, _why(protocol, name), frozenset(supported), version, tmux, shm_probed)
     reason = "no graphics answer" if _DEVICE_ATTRIBUTES.search(answer) else "the terminal didn't answer"
-    return Capabilities("halfblock", cell, name, budget, reason, frozenset(supported), version, tmux)
+    return Capabilities("halfblock", cell, name, budget, reason, frozenset(supported), version, tmux, shm_probed)
 
 
 def _why(protocol: str, name: str) -> str:
@@ -254,7 +286,13 @@ def _wrap(codes: str, tmux: bool) -> str:
     return "\x1bPtmux;" + codes.replace("\x1b", "\x1b\x1b") + "\x1b\\"
 
 
-def _ask(tty_path: str, timeout: float, tmux: bool = False) -> tuple[bytes, int, int, tuple[int, int]]:
+def _ask(
+    tty_path: str,
+    timeout: float,
+    tmux: bool = False,
+    *,
+    shm_probe: tuple[int, str] | None = None,
+) -> tuple[bytes, int, int, tuple[int, int]]:
     """Send the queries on the tty and read the answers, the terminal in no-echo mode."""
     import fcntl
     import select
@@ -269,7 +307,13 @@ def _ask(tty_path: str, timeout: float, tmux: bool = False) -> tuple[bytes, int,
         saved = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd, termios.TCSANOW)  # no echo, no line buffering
-            outer = kitty.query(kitty.new_image_id()) + "\x1b[>0q\x1b[16t\x1b[14t\x1b]1337;ReportCellSize\x07"
+            direct_id = kitty.new_image_id()
+            if shm_probe is not None and direct_id == shm_probe[0]:
+                direct_id = 0x000100 if direct_id >= 0xFFFFFF else direct_id + 1
+            outer = kitty.query(direct_id)
+            if shm_probe is not None:
+                outer += kitty.query_shm(shm_probe[0], shm_probe[1])
+            outer += "\x1b[>0q\x1b[16t\x1b[14t\x1b]1337;ReportCellSize\x07"
             # Device attributes last, unwrapped: tmux answers it itself, after the rest.
             os.write(fd, (_wrap(outer, tmux) + "\x1b[c").encode())
             answer = b""
