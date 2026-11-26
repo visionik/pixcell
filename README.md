@@ -134,6 +134,35 @@ BrowserApp().run()
 - What each terminal really does comes from [terminal-facts](https://github.com/visionik/terminal-facts),
   vendored as `src/pixcell/terminals.toml` by `tools/update_facts.py`. It's shared with sdl-kitty, and
   each fact has its evidence.
+- **Local SHM (`t=s`) for `LiveImage`**: on local POSIX terminals known or probed to support Kitty
+  shared-memory transmission, `LiveImage` writes uncompressed RGB/RGBA pixels into a pre-faulted,
+  reused POSIX shared-memory pool (`pixcell.shm.ShmPool`) and sends a short `t=s` command instead
+  of zlib-compressing and base64-encoding pixel data. Detection runs a one-shot `a=q,t=s` query in
+  the same startup round trip as `a=q,t=d` (only when local) and combines it with `kitty.shm` from
+  `terminals.toml`. Any remote (`SSH_CONNECTION`/`SSH_CLIENT`/`SSH_TTY`), multiplexed (`TMUX`/`STY`
+  or `TERM=screen*`/`tmux*`), non-`t=s`, non-POSIX, or iTerm2 session falls back to the direct
+  zlib/PNG (`t=d`) path. Opt out with `PIXCELL_SHM=0`, `pixcell.textual.configure(shm=False)`, or
+  `LiveImage(..., shm=False)`.
+
+  | Terminal | `kitty.shm` (`terminals.toml`) | `LiveImage` local SHM (`t=s`) | Notes |
+  | --- | --- | --- | --- |
+  | Kitty | `true` | Yes (local only) | First-class `t=s`; falls back to `t=d` over SSH/tmux/isolated `/dev/shm` |
+  | Ghostty (all versions) | `true` | Yes (local only) | `t=s` for both `a=f` edits (1.4+) and double-buffered swaps (<=1.3.1) |
+  | iTerm2 (3.7+) | `true` | No (direct PNG) | `kitty.fastest_format = "png"`; falls back to direct PNG (`f=100`) |
+  | Rex | `false` | No (direct zlib) | `a=q,t=s` is silent/failing; uses direct `t=d` (`o=z`) |
+  | WezTerm | `false` (macOS) / unknown | No (overlay / direct) | No Kitty placeholders; `t=s` fails with `ENXIO` on macOS (wezterm#8063) |
+  | Unknown Kitty terminal | unknown | Only if live `a=q,t=s` probe returns `OK` | Fails closed to `t=d` when not probed or probe fails |
+
+- **Output-queue gating for `LiveImage`**: before writing a live frame, `pixcell.ttyqueue.OutputGate`
+  checks the tty output queue depth via `TIOCOUTQ` (`fcntl.ioctl`) where available. If queued bytes
+  exceed the threshold (default 4096 bytes; override with `PIXCELL_OUTPUT_QUEUE_LIMIT` or
+  `LiveImage(..., output_queue_limit=...)`), the frame is held for the next tick (latest frame wins)
+  so frames do not pile up in a congested tty. Clean no-op where `TIOCOUTQ` is unavailable (Windows,
+  non-tty fds, headless tests). Opt out with `PIXCELL_OUTPUT_GATING=0`,
+  `pixcell.textual.configure(output_gating=False)`, or `LiveImage(..., output_gating=False)`.
+- Both the pre-faulted SHM pool and `TIOCOUTQ` output-queue gating techniques were inspired by
+  [zenbu-labs/terminal-browser](https://github.com/zenbu-labs/terminal-browser) (`pixel`, MIT) and
+  re-implemented for pixcell.
 - The Kitty side is written from the protocol's documentation
   (<https://sw.kovidgoyal.net/kitty/graphics-protocol/>). The placeholder row/column marks
   are generated from the Unicode Character Database by `tools/gen_diacritics.py`.

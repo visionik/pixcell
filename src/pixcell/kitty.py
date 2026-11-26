@@ -75,16 +75,24 @@ def frame(
     return "".join(codes)
 
 
+def raw_pixels(picture) -> tuple[dict[str, object], bytes]:
+    """A Pillow picture as uncompressed raw pixels for ``f=24``/``f=32`` (e.g. SHM)."""
+    has_alpha = picture.mode in ("RGBA", "LA") or (picture.mode == "P" and "transparency" in picture.info)
+    target = "RGBA" if has_alpha else "RGB"
+    if picture.mode != target:
+        picture = picture.convert(target)
+    keys: dict[str, object] = {"f": 32 if has_alpha else 24, "s": picture.width, "v": picture.height}
+    return keys, picture.tobytes()
+
+
 def pixels(picture) -> tuple[dict[str, object], bytes]:
     """A Pillow picture as raw pixels for ``f=24``/``f=32``, zlib-compressed (``o=z``):
     the keys to send with it, and the payload. Cheaper to make and (in most terminals)
     to take in than PNG; see tools/decode_bench.py."""
     import zlib
 
-    has_alpha = picture.mode in ("RGBA", "LA") or (picture.mode == "P" and "transparency" in picture.info)
-    picture = picture.convert("RGBA" if has_alpha else "RGB")
-    keys = {"f": 32 if has_alpha else 24, "s": picture.width, "v": picture.height, "o": "z"}
-    return keys, zlib.compress(picture.tobytes(), 1)
+    keys, data = raw_pixels(picture)
+    return {**keys, "o": "z"}, zlib.compress(data, 1)
 
 
 def _chunked(first: dict[str, object], data: bytes, more: dict[str, object], chunk_bytes: int) -> str:
@@ -104,11 +112,60 @@ def transmit_pixels(image_id: int, picture, *, chunk_bytes: int = CHUNK_BYTES) -
     return _chunked({"a": "t", "t": "d", "i": image_id, **keys, "q": 2}, data, {}, chunk_bytes)
 
 
+def transmit_shm(
+    image_id: int,
+    shm_name: str,
+    width: int,
+    height: int,
+    size: int,
+    *,
+    fmt: int = 24,
+) -> str:
+    """Send a picture from a POSIX shared-memory object (``a=t,t=s``).
+
+    ``size`` (``S=``) is the exact pixel byte count to read from the beginning
+    of ``shm_name`` (pooled segments may be rounded up to a larger size class).
+    """
+    payload = base64.standard_b64encode(shm_name.encode("utf-8")).decode("ascii")
+    return command({"a": "t", "t": "s", "i": image_id, "f": fmt, "s": width, "v": height, "S": size, "q": 2}, payload)
+
+
 def edit_pixels(image_id: int, picture, x: int, y: int, *, frame: int = 1, chunk_bytes: int = CHUNK_BYTES) -> str:
     """Overwrite part of a frame in place with zlib-compressed raw pixels."""
     keys, data = pixels(picture)
     first = {"a": "f", "i": image_id, "r": frame, "x": x, "y": y, **keys, "X": 1, "q": 2}
     return _chunked(first, data, {"a": "f"}, chunk_bytes)
+
+
+def edit_shm(
+    image_id: int,
+    shm_name: str,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    size: int,
+    *,
+    frame: int = 1,
+    fmt: int = 24,
+) -> str:
+    """Overwrite part of a frame in place from a POSIX shared-memory object (``a=f,t=s``)."""
+    payload = base64.standard_b64encode(shm_name.encode("utf-8")).decode("ascii")
+    keys = {
+        "a": "f",
+        "t": "s",
+        "i": image_id,
+        "r": frame,
+        "x": x,
+        "y": y,
+        "f": fmt,
+        "s": width,
+        "v": height,
+        "S": size,
+        "X": 1,
+        "q": 2,
+    }
+    return command(keys, payload)
 
 
 def edit(image_id: int, png: bytes, x: int, y: int, *, frame: int = 1, chunk_bytes: int = CHUNK_BYTES) -> str:
@@ -185,6 +242,12 @@ def query(image_id: int) -> str:
     A supporting terminal answers ``ESC _ G i=<id> ; OK ESC \\``.
     """
     return command({"i": image_id, "s": 1, "v": 1, "a": "q", "t": "d", "f": 24}, "AAAA")
+
+
+def query_shm(image_id: int, shm_name: str, width: int = 1, height: int = 1, size: int = 3, *, fmt: int = 24) -> str:
+    """Ask whether the terminal can read a POSIX shared-memory object (``a=q,t=s``)."""
+    payload = base64.standard_b64encode(shm_name.encode("utf-8")).decode("ascii")
+    return command({"i": image_id, "s": width, "v": height, "S": size, "a": "q", "t": "s", "f": fmt}, payload)
 
 
 def id_colour(image_id: int) -> tuple[int, int, int]:

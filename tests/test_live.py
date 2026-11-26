@@ -96,7 +96,7 @@ async def test_png_where_the_terminal_takes_it_faster():
 async def test_whole_frames_swap_ids_where_edits_are_unknown():
     live, _, updates, _, _ = await _run(Capabilities("kitty", (8, 16), terminal="ghostty", version="1.3.1"))
     assert "a=f," not in updates
-    ids = re.findall(r"a=t,t=d,i=(\d+)", updates)
+    ids = re.findall(r"a=t,t=[ds],i=(\d+)", updates)
     assert len(ids) == 3 and ids[0] != ids[1] and ids[0] == ids[2]  # two buffers in turn
 
 

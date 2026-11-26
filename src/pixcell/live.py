@@ -10,8 +10,15 @@ so cells map to known pixels: clicks and scrolls come back as
 
 With Kitty placeholders, only what changed is sent: the bounding box of the difference
 from the last frame shown, as an in-place edit of the image (``a=f`` with ``r=1``),
-in the format the terminal takes in fastest (raw pixels + zlib; PNG for iTerm2). Where
+in the format the terminal takes in fastest (raw pixels + zlib; PNG for iTerm2), or
+over a pre-faulted POSIX shared-memory pool (``t=s``) on local terminals known or
+probed to support it (excluding SSH, tmux/screen, and iTerm2; opt out with
+``PIXCELL_SHM=0``, ``configure(shm=False)``, or ``LiveImage(..., shm=False)``). Where
 edits aren't known to redraw, whole frames are swapped between two image ids instead.
+Before writing a frame, ``TIOCOUTQ`` output-queue gating holds the frame (latest frame
+wins) if the tty output queue is backed up (no-op where unavailable; opt out with
+``PIXCELL_OUTPUT_GATING=0``, ``configure(output_gating=False)``, or
+``LiveImage(..., output_gating=False)``).
 Overlay protocols (Sixel, iTerm2, Kitty placements) and half blocks repaint the widget.
 
 Sixel is encoded on the main thread, each frame. Checked by eye (2026-11-07) in WezTerm
@@ -34,8 +41,17 @@ from typing import TYPE_CHECKING
 from textual import events
 from textual.message import Message
 
-from pixcell import kitty
-from pixcell.textual import OVERLAY, Image, _png, _registry, capabilities, cell_size
+from pixcell import kitty, shm, ttyqueue
+from pixcell.textual import (
+    OVERLAY,
+    Image,
+    _png,
+    _registry,
+    capabilities,
+    cell_size,
+    output_gating_enabled,
+    shm_enabled,
+)
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
@@ -66,6 +82,9 @@ class LiveImage(Image):
         *,
         fps: float = 15.0,
         protocol: str | None = None,
+        shm: bool | None = None,
+        output_gating: bool | None = None,
+        output_queue_limit: int | None = None,
         alt: str = "",
         name: str | None = None,
         id: str | None = None,
@@ -82,6 +101,16 @@ class LiveImage(Image):
         self.frames_shown = 0
         self.bytes_sent = 0
         self.busy_seconds = 0.0  # main-thread time spent showing frames
+        self.frames_gated = 0  # frames held because the tty output queue was backed up
+        self.shm_frames = 0  # frames sent over local POSIX shared memory (t=s)
+        self._shm_opt = shm
+        self._shm_pool: shm.ShmPool | None = None
+        self._shm_failed = False
+        self._gate = ttyqueue.OutputGate(
+            enabled=output_gating,
+            threshold=output_queue_limit,
+            default_enabled=output_gating_enabled,
+        )
 
     # Frames in ------------------------------------------------------------------------
 
@@ -101,6 +130,12 @@ class LiveImage(Image):
             return
         if self.screen is not self.app.screen or self._visible(self.screen) is None:
             with self._lock:  # out of view: keep it for when it's back
+                if self._pending is None:
+                    self._pending = frame
+            return
+        if self.protocol != "host" and self._gate.is_backed_up(getattr(self.app, "_driver", None)):
+            self.frames_gated += 1
+            with self._lock:  # tty backed up: hold unless a newer frame arrived
                 if self._pending is None:
                     self._pending = frame
             return
@@ -180,11 +215,7 @@ class LiveImage(Image):
         if capabilities().edits:
             left, top, right, bottom = changed
             piece = canvas.crop(changed)
-            if capabilities().frame_format == "png":
-                code = kitty.edit(self._image_id, _png(piece), left, top)
-            else:
-                code = kitty.edit_pixels(self._image_id, piece, left, top)
-            self._write_counted(code)
+            self._write_counted(self._edit(self._image_id, piece, left, top))
         else:
             # Whole frames, double-buffered (as stepped animation): the spare id gets the
             # frame and a placement, then the placeholder text switches to it.
@@ -194,7 +225,56 @@ class LiveImage(Image):
             self._swap_buffers(canvas.width * canvas.height * 4)
         self._shown = canvas
 
+    def _use_shm(self) -> bool:
+        if self._shm_failed or self.protocol != "kitty":
+            return False
+        enabled = shm_enabled() if self._shm_opt is None else self._shm_opt
+        return shm.can_use_shm(capabilities(), enabled=enabled)
+
+    def _ensure_shm_pool(self) -> shm.ShmPool | None:
+        if not self._use_shm():
+            return None
+        if self._shm_pool is None:
+            try:
+                self._shm_pool = shm.ShmPool()
+            except OSError:
+                self._shm_failed = True
+                return None
+        return self._shm_pool
+
+    def _close_shm(self) -> None:
+        pool, self._shm_pool = self._shm_pool, None
+        if pool is not None:
+            pool.close()
+
+    def _edit(self, image_id: int, piece: "PILImage", x: int, y: int) -> str:
+        if (pool := self._ensure_shm_pool()) is not None:
+            try:
+                keys, data = kitty.raw_pixels(piece)
+                name = pool.write(data)
+                self.shm_frames += 1
+                return kitty.edit_shm(
+                    image_id, name, x, y, int(keys["s"]), int(keys["v"]), len(data), fmt=int(keys["f"])
+                )
+            except OSError:
+                self._shm_failed = True
+                self._close_shm()
+        if capabilities().frame_format == "png":
+            return kitty.edit(image_id, _png(piece), x, y)
+        return kitty.edit_pixels(image_id, piece, x, y)
+
     def _whole(self, image_id: int, canvas: "PILImage") -> str:
+        if (pool := self._ensure_shm_pool()) is not None:
+            try:
+                keys, data = kitty.raw_pixels(canvas)
+                name = pool.write(data)
+                self.shm_frames += 1
+                return kitty.transmit_shm(
+                    image_id, name, int(keys["s"]), int(keys["v"]), len(data), fmt=int(keys["f"])
+                )
+            except OSError:
+                self._shm_failed = True
+                self._close_shm()
         if capabilities().frame_format == "png":
             return kitty.transmit(image_id, _png(canvas))
         return kitty.transmit_pixels(image_id, canvas)
@@ -202,6 +282,9 @@ class LiveImage(Image):
     def _write_counted(self, codes: str) -> None:
         self.bytes_sent += len(codes)
         self._write(codes)
+
+    def on_unmount(self) -> None:  # (Image.on_unmount also runs and frees both image ids)
+        self._close_shm()
 
     # Mouse -------------------------------------------------------------------------------
 

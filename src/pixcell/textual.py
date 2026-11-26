@@ -44,15 +44,27 @@ _capabilities = Capabilities("halfblock", reason="pixcell.textual.configure() wa
 
 
 _animate = True
+_shm = True
+_output_gating = True
 
 
-def configure(capabilities: Capabilities | None = None, *, animate: bool = True) -> Capabilities:
+def configure(
+    capabilities: Capabilities | None = None,
+    *,
+    animate: bool = True,
+    shm: bool = True,
+    output_gating: bool = True,
+) -> Capabilities:
     """Set what the terminal can draw (probing it if not given). Call before ``App.run``.
 
     ``animate=False`` keeps animated pictures (GIF, WebP, APNG) still, on their first frame.
+    ``shm=False`` disables local POSIX shared-memory (``t=s``) frame transfers in ``LiveImage``.
+    ``output_gating=False`` disables ``TIOCOUTQ`` tty output-queue gating in ``LiveImage``.
     """
-    global _capabilities, _animate
+    global _capabilities, _animate, _shm, _output_gating
     _animate = animate
+    _shm = shm
+    _output_gating = output_gating
     _capabilities = capabilities if capabilities is not None else detect()
     _registry.budget = _capabilities.image_budget
     return _capabilities
@@ -60,6 +72,16 @@ def configure(capabilities: Capabilities | None = None, *, animate: bool = True)
 
 def capabilities() -> Capabilities:
     return _capabilities
+
+
+def shm_enabled() -> bool:
+    """Global config default for ``LiveImage`` SHM frame transfers (still subject to env/probe)."""
+    return _shm
+
+
+def output_gating_enabled() -> bool:
+    """Global config default for ``LiveImage`` tty output-queue gating (still subject to env)."""
+    return _output_gating
 
 
 def set_cell_size(width: int, height: int) -> bool:
