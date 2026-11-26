@@ -98,7 +98,6 @@ class LiveImage(Image):
         self._pending: PILImage | None = None
         self._shown: PILImage | None = None  # the canvas the terminal has (Kitty placeholders)
         self._geometry: tuple[float, int, int] = (1.0, 0, 0)  # scale, x and y offset of the frame
-        self._swapping_id = kitty.new_image_id()  # where edits aren't known to redraw
         self.frames_shown = 0
         self.bytes_sent = 0
         self.busy_seconds = 0.0  # main-thread time spent showing frames
@@ -160,7 +159,7 @@ class LiveImage(Image):
             if self.protocol == "kitty-direct" and self._sent_box is not None:
                 self._write(kitty.delete(self._image_id))  # new data under the same id
                 _registry.remove(self._image_id)
-                self._sent_box = None
+                self._forget_sent()
             self.bytes_sent += self._repaint()  # painted straight over the old frame
         else:
             self._halfblock = None
@@ -197,7 +196,8 @@ class LiveImage(Image):
         codes += self._whole(self._image_id, canvas) + kitty.place(self._image_id, columns, rows)
         self._write_counted(codes)
         _registry.add(self._image_id, canvas.width * canvas.height * 4, self)
-        self._shown, self._sent_box, self._placed, self._sending = canvas, canvas.size, (columns, rows), False
+        self._shown = canvas
+        self._mark_sent(canvas.size, (columns, rows))
         self.refresh()
 
     def _kitty_update(self) -> None:
@@ -217,15 +217,12 @@ class LiveImage(Image):
             piece = canvas.crop(changed)
             self._write_counted(self._edit(self._image_id, piece, left, top))
         else:
-            # Whole frames, double-buffered: the spare id gets the frame and a placement,
-            # then the placeholder text switches to it.
+            # Whole frames, double-buffered (as stepped animation): the spare id gets the
+            # frame and a placement, then the placeholder text switches to it.
             columns, rows = self._placed
-            spare = self._swapping_id
+            spare = self._spare_id
             self._write_counted(kitty.delete(spare) + self._whole(spare, canvas) + kitty.place(spare, columns, rows))
-            _registry.remove(self._image_id)
-            _registry.add(spare, canvas.width * canvas.height * 4, self)
-            self._image_id, self._swapping_id = spare, self._image_id
-            self.refresh()
+            self._swap_buffers(canvas.width * canvas.height * 4)
         self._shown = canvas
 
     def _use_shm(self) -> bool:
@@ -286,10 +283,8 @@ class LiveImage(Image):
         self.bytes_sent += len(codes)
         self._write(codes)
 
-    def on_unmount(self) -> None:  # (Image.on_unmount deletes the shown id)
+    def on_unmount(self) -> None:  # (Image.on_unmount also runs and frees both image ids)
         self._close_shm()
-        if self.protocol == "kitty" and self._sent_box is not None:
-            self._write(kitty.delete(self._swapping_id))
 
     # Mouse -------------------------------------------------------------------------------
 
