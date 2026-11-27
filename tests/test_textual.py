@@ -82,3 +82,59 @@ async def test_halfblock_widget_draws_colours():
         line = widget.render_line(0)
         assert line.text == "▀" * 10
         assert {segment.style.color.triplet for segment in line} == {(0, 128, 0)}
+
+
+async def test_kitty_static_image_uses_zlib_and_large_chunks_on_fast_terminals(monkeypatch):
+    import base64
+    import random
+    import re
+    import zlib
+
+    # Noisy image so compressed payload exceeds 4096 B base64, proving chunk_bytes > 4096 is used.
+    rng = random.Random(42)
+    raw = bytes(rng.getrandbits(8) for _ in range(160 * 128 * 3))
+    picture = PILImage.frombytes("RGB", (160, 128), raw)
+
+    ct.configure(Capabilities("kitty", (16, 32), terminal="ghostty", version="1.4.0"))
+    try:
+        widget = ct.Image(picture)
+        recorder = Recorder()
+        app = _app(widget, recorder)
+        async with app.run_test() as pilot:
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if widget._sent_box:
+                    break
+            sent = "".join(recorder.codes)
+            image_id = widget._image_id
+            # Ghostty has max_escape_bytes = 65 MiB -> single a=t APC (no m=1 chunking) with o=z
+            apcs = re.findall(r"\x1b_G([^;]*)(?:;([^\x1b]*))?\x1b\\", sent)
+            tx = [(k, p) for k, p in apcs if "a=t" in k]
+            assert len(tx) == 1
+            keys, payload = tx[0]
+            assert f"i={image_id}" in keys
+            assert "o=z" in keys
+            assert "f=24" in keys
+            assert "m=" not in keys
+            # Compressed payload must decompress to exact raw RGB bytes
+            decoded = zlib.decompress(base64.standard_b64decode(payload))
+            assert decoded == raw
+    finally:
+        ct.configure(Capabilities("halfblock"))
+
+
+async def test_kitty_static_image_keeps_png_on_iterm2():
+    ct.configure(Capabilities("kitty", (8, 16), terminal="iterm2", version="3.7.7"))
+    try:
+        widget = ct.Image(PILImage.new("RGB", (80, 64), (30, 120, 200)))
+        recorder = Recorder()
+        app = _app(widget, recorder)
+        async with app.run_test() as pilot:
+            for _ in range(40):
+                await pilot.pause(0.05)
+                if widget._sent_box:
+                    break
+            sent = "".join(recorder.codes)
+            assert f"a=t,f=100,t=d,i={widget._image_id},q=2" in sent
+    finally:
+        ct.configure(Capabilities("halfblock"))

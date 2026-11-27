@@ -28,7 +28,6 @@ WezTerm's memory steady (~200 MB) as frames replace each other. Sixel at 60 mana
 
 from __future__ import annotations
 
-import os
 import threading
 from typing import Any, TYPE_CHECKING
 
@@ -36,27 +35,19 @@ from textual import events
 from textual.message import Message
 
 from pixcell import kitty
-from pixcell.textual import OVERLAY, Image, _png, _registry, capabilities, cell_size
+from pixcell.textual import (
+    OVERLAY,
+    Image,
+    _load_kittyops,
+    _png,
+    _registry,
+    _transmit_kitty_pixels,
+    capabilities,
+    cell_size,
+)
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
-
-
-def _load_kittyops() -> Any:
-    """Optionally load the native C99 ``kittyops`` accelerator (``pip install pixcell[fast]``).
-
-    Returns the module when available and not disabled via ``PIXCELL_KITTYOPS=0``,
-    otherwise ``None`` so pixcell stays pure Python by default.
-    """
-    if os.environ.get("PIXCELL_KITTYOPS") == "0":
-        return None
-    try:
-        import kittyops
-
-        kittyops.compression_backend()  # verify shared library loads cleanly
-        return kittyops
-    except Exception:
-        return None
 
 
 class LiveImage(Image):
@@ -265,7 +256,7 @@ class LiveImage(Image):
         caps = capabilities()
         if caps.frame_format == "png":
             return kitty.transmit(image_id, _png(canvas), chunk_bytes=caps.chunk_bytes)
-        return kitty.transmit_pixels(image_id, canvas, chunk_bytes=caps.chunk_bytes)
+        return _transmit_kitty_pixels(image_id, canvas, caps.chunk_bytes)
 
     def _write_counted(self, codes: str) -> None:
         self.bytes_sent += len(codes)

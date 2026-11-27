@@ -24,9 +24,10 @@ from __future__ import annotations
 import io
 import math
 import os
+import threading
 import time
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from rich.color import Color
 from rich.segment import Segment
@@ -44,6 +45,55 @@ _capabilities = Capabilities("halfblock", reason="pixcell.textual.configure() wa
 
 
 _animate = True
+
+_kops_transmit_lock = threading.Lock()
+_kops_transmit_encoder: Any = None
+
+
+def _load_kittyops() -> Any:
+    """Optionally load the native C99 ``kittyops`` accelerator.
+
+    Returns the module when available and not disabled via ``PIXCELL_KITTYOPS=0``,
+    otherwise ``None`` so pixcell stays pure Python by default.
+    """
+    if os.environ.get("PIXCELL_KITTYOPS") == "0":
+        return None
+    try:
+        import kittyops
+
+        kittyops.compression_backend()  # verify shared library loads cleanly
+        return kittyops
+    except Exception:
+        return None
+
+
+def _transmit_kitty_pixels(image_id: int, picture, chunk_bytes: int) -> str:
+    """Transmit a whole picture as zlib-compressed raw pixels (``a=t,o=z``).
+
+    Uses ``libkittyops`` parallel-zlib / libdeflate when installed, falling back to
+    pure-Python :func:`pixcell.kitty.transmit_pixels`.
+    """
+    global _kops_transmit_encoder
+    mod = _load_kittyops()
+    if mod is not None:
+        has_alpha = picture.mode in ("RGBA", "LA") or (picture.mode == "P" and "transparency" in picture.info)
+        mode = "RGBA" if has_alpha else "RGB"
+        converted = picture if picture.mode == mode else picture.convert(mode)
+        bpp = 4 if has_alpha else 3
+        raw = converted.tobytes()
+        try:
+            kcaps = mod.Caps(max_escape_bytes=chunk_bytes, shm=False, placeholders=True)
+            with _kops_transmit_lock:
+                if _kops_transmit_encoder is None:
+                    _kops_transmit_encoder = mod.Encoder(zlib_level=3)
+                apc_bytes, _stats = _kops_transmit_encoder.encode_frame(
+                    image_id, None, raw, converted.width, converted.height, bpp, kcaps
+                )
+            if apc_bytes:
+                return apc_bytes.decode("ascii")
+        except Exception:
+            pass
+    return kitty.transmit_pixels(image_id, picture, chunk_bytes=chunk_bytes)
 
 
 def configure(capabilities: Capabilities | None = None, *, animate: bool = True) -> Capabilities:
@@ -395,7 +445,11 @@ class Image(Widget):
         png = self._steps[self._step_index][0]
         columns, rows = self._placed
         spare = self._spare_id
-        self._write(kitty.delete(spare) + kitty.transmit(spare, png) + kitty.place(spare, columns, rows))
+        self._write(
+            kitty.delete(spare)
+            + kitty.transmit(spare, png, chunk_bytes=_capabilities.chunk_bytes)
+            + kitty.place(spare, columns, rows)
+        )
         self._swap_buffers(self._sent_box[0] * self._sent_box[1] * 4)
 
     def _repaint(self) -> int:
@@ -553,9 +607,15 @@ class Image(Widget):
                 size = canvas.width * canvas.height * 4 * (len(moving) if moving else 1)
                 codes += "".join(kitty.delete(old) for old in _registry.make_room(size, keep=self._image_id))
                 if moving:
-                    codes += _kitty_animation(self._image_id, [(_png(picture), gap) for picture, gap in moving])
+                    codes += _kitty_animation(
+                        self._image_id,
+                        [(_png(picture), gap) for picture, gap in moving],
+                        chunk_bytes=_capabilities.chunk_bytes,
+                    )
+                elif _capabilities.fact("kitty.fastest_format") == "zlib":
+                    codes += _transmit_kitty_pixels(self._image_id, canvas, _capabilities.chunk_bytes)
                 else:
-                    codes += kitty.transmit(self._image_id, _png(canvas))
+                    codes += kitty.transmit(self._image_id, _png(canvas), chunk_bytes=_capabilities.chunk_bytes)
                 _registry.add(self._image_id, size, self)
                 self._mark_sent(canvas.size, None)
             _registry.touch(self._image_id)
@@ -680,28 +740,45 @@ class Image(Widget):
                 self.app.call_from_thread(setattr, self, "_animation", "stepped")
             if moving is None:
                 self.app.call_from_thread(self._stop_animating, "too long or too big")
+        transmit_code: str | None = None
         if moving is not None:
             encoded, size, _decoded = moving
         else:
             first = fit(self.image)
-            encoded, size = [(_png(first), 0)], first.size
-        self.app.call_from_thread(self._sent, encoded, size, box, columns, rows)
+            size = first.size
+            if _capabilities.fact("kitty.fastest_format") == "zlib":
+                encoded = []
+                transmit_code = _transmit_kitty_pixels(self._image_id, first, _capabilities.chunk_bytes)
+            else:
+                encoded = [(_png(first), 0)]
+        self.app.call_from_thread(self._sent, encoded, size, box, columns, rows, transmit_code)
 
-    def _sent(self, encoded: list, size: tuple[int, int], box: tuple[int, int], columns: int, rows: int) -> None:
+    def _sent(
+        self,
+        encoded: list,
+        size: tuple[int, int],
+        box: tuple[int, int],
+        columns: int,
+        rows: int,
+        transmit_code: str | None = None,
+    ) -> None:
         if not self.is_attached:
             self._upload = "unsent"  # unmounted while encoding
             return
         # What the terminal keeps: every frame when it plays them, two when stepped (room
         # for both now; each buffer is counted as it fills).
-        kept = len(encoded) if self._animation == "native" else min(2, len(encoded))
+        kept = len(encoded) if self._animation == "native" else min(2, max(1, len(encoded)))
         frame_bytes = size[0] * size[1] * 4
         codes = [kitty.delete(old) for old in _registry.make_room(frame_bytes * kept, keep=self._image_id)]
         if self._sent_box is not None:
             codes.append(kitty.delete(self._image_id))  # replacing its data needs a delete
-        if len(encoded) > 1 and self._animation == "native":
-            codes.append(_kitty_animation(self._image_id, encoded))
+        chunk_bytes = _capabilities.chunk_bytes
+        if transmit_code is not None:
+            codes.append(transmit_code)
+        elif len(encoded) > 1 and self._animation == "native":
+            codes.append(_kitty_animation(self._image_id, encoded, chunk_bytes=chunk_bytes))
         else:
-            codes.append(kitty.transmit(self._image_id, encoded[0][0]))
+            codes.append(kitty.transmit(self._image_id, encoded[0][0], chunk_bytes=chunk_bytes))
         codes.append(kitty.place(self._image_id, columns, rows))
         self._paused = False
         if len(encoded) > 1 and self._animation == "stepped":
@@ -805,12 +882,12 @@ def _better_for_animation(mode: str) -> tuple[str, str] | None:
     return None
 
 
-def _kitty_animation(image_id: int, encoded: list) -> str:
+def _kitty_animation(image_id: int, encoded: list, *, chunk_bytes: int = kitty.CHUNK_BYTES) -> str:
     """Codes for an animation: the first frame as the image, the rest as frames, its
     first frame's gap, then play it, looping."""
     (first, first_gap), rest = encoded[0], encoded[1:]
-    codes = [kitty.transmit(image_id, first)]
-    codes += [kitty.frame(image_id, png, gap) for png, gap in rest]
+    codes = [kitty.transmit(image_id, first, chunk_bytes=chunk_bytes)]
+    codes += [kitty.frame(image_id, png, gap, chunk_bytes=chunk_bytes) for png, gap in rest]
     codes.append(kitty.animate(image_id, frame=1, gap=first_gap))
     codes.append(kitty.animate(image_id, run=True))
     return "".join(codes)
