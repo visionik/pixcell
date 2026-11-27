@@ -359,7 +359,10 @@ class Image(Widget):
             _registry.touch(self._image_id)
             if self._spare_holds:
                 _registry.touch(self._spare_id)
-        style = Style(color=Color.from_rgb(*kitty.id_colour(self._image_id)))
+        base_bg, widget_bg = self.background_colors
+        resolved_bg = base_bg + widget_bg
+        bgcolor = Color.from_rgb(*resolved_bg.rgb) if resolved_bg.a > 0 else None
+        style = Style(color=Color.from_rgb(*kitty.id_colour(self._image_id)), bgcolor=bgcolor)
         return Strip([Segment(kitty.placeholder_row(self._image_id, y, columns), style)], columns)
 
     def _halfblock_lines(self, columns: int, rows: int) -> list[Strip]:
@@ -539,7 +542,8 @@ class Image(Widget):
 
     def _sixel_key(self) -> tuple:
         columns, rows = self.content_size
-        background = self.background_colors[1].rgb
+        base_bg, widget_bg = self.background_colors
+        background = (base_bg + widget_bg).rgb
         return (columns, rows, *cell_size(), background)
 
     def _fully_visible(self) -> bool:
@@ -918,6 +922,9 @@ class _Painter:
     def __init__(self, app) -> None:
         self.app = app
         self.widgets: set[Image] = set()
+        self.sources: set[object] = set()
+        """Terminal panes. Each has ``graphics_overlay(screen, renderable)`` for pictures
+        that are drawn at the cursor (iTerm2, Sixel, Kitty-at-the-cursor)."""
         self._display = app._display
         app._display = self._display_and_paint
 
@@ -930,9 +937,19 @@ class _Painter:
 
     def _display_and_paint(self, screen, renderable) -> None:
         self._display(screen, renderable)
-        if renderable is None or not self.widgets or getattr(self.app, "_batch_count", 0):
+        if renderable is None or getattr(self.app, "_batch_count", 0):
+            return
+        if not self.widgets and not self.sources:
             return
         codes = "".join(widget._overlay_paint(screen, renderable) for widget in list(self.widgets))
+        for source in list(self.sources):
+            paint = getattr(source, "graphics_overlay", None)
+            if paint is None:
+                continue
+            try:
+                codes += paint(screen, renderable) or ""
+            except Exception:
+                continue
         self._write(codes)
 
     def paint_now(self, widget: "Image") -> int:

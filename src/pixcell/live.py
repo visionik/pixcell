@@ -205,7 +205,7 @@ class LiveImage(Image):
             return
 
         caps = capabilities()
-        if caps.edits and caps.frame_format == "pixels":
+        if caps.edits and caps.fastest_format == "zlib":
             kops_mod, kops_enc = self._get_kops()
             if kops_mod is not None and kops_enc is not None:
                 prev_bytes = self._shown_bytes if self._shown_bytes is not None else self._shown.tobytes()
@@ -238,10 +238,13 @@ class LiveImage(Image):
         if caps.edits:
             left, top, right, bottom = changed
             piece = canvas.crop(changed)
-            if caps.frame_format == "png":
+            fmt = caps.fastest_format
+            if fmt == "png":
                 code = kitty.edit(self._image_id, _png(piece), left, top, chunk_bytes=caps.chunk_bytes)
             else:
-                code = kitty.edit_pixels(self._image_id, piece, left, top, chunk_bytes=caps.chunk_bytes)
+                code = kitty.edit_pixels(
+                    self._image_id, piece, left, top, compress=fmt == "zlib", chunk_bytes=caps.chunk_bytes
+                )
             self._write_counted(code)
         else:
             # Whole frames, double-buffered (as stepped animation): the spare id gets the
@@ -254,9 +257,12 @@ class LiveImage(Image):
 
     def _whole(self, image_id: int, canvas: "PILImage") -> str:
         caps = capabilities()
-        if caps.frame_format == "png":
+        fmt = caps.fastest_format
+        if fmt == "png":
             return kitty.transmit(image_id, _png(canvas), chunk_bytes=caps.chunk_bytes)
-        return _transmit_kitty_pixels(image_id, canvas, caps.chunk_bytes)
+        if fmt == "zlib":
+            return _transmit_kitty_pixels(image_id, canvas, caps.chunk_bytes)
+        return kitty.transmit_pixels(image_id, canvas, compress=False, chunk_bytes=caps.chunk_bytes)
 
     def _write_counted(self, codes: str) -> None:
         self.bytes_sent += len(codes)
@@ -278,7 +284,11 @@ class LiveImage(Image):
             return int(x), int(y)
         return None
 
-    def on_click(self, event: events.Click) -> None:
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        # Mouse-up (not Click): native Webual clients always send down/up, and Click
+        # synthesis can miss when the pointer moves a cell during the press.
+        if event.button != 1:
+            return
         if (where := self.to_pixels(event.pointer_x, event.pointer_y)) is not None:
             event.stop()
             self.post_message(self.Clicked(self, *where, event.button))

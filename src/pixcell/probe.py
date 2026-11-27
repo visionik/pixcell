@@ -96,6 +96,16 @@ class Capabilities:
         return "png" if self.fact("kitty.fastest_format") == "png" else "pixels"
 
     @property
+    def fastest_format(self) -> str:
+        """How a Kitty upload is encoded: ``zlib``, ``raw``, or ``png``.
+
+        Zlib only when ``kitty.fastest_format`` is ``zlib``. ``raw`` is uncompressed
+        pixels. Anything else, including an unknown terminal, is a PNG.
+        """
+        fmt = self.fact("kitty.fastest_format")
+        return fmt if fmt in ("zlib", "raw") else "png"
+
+    @property
     def edits(self) -> bool:
         """Does the terminal redraw a placeholder image edited in place (``a=f`` with
         ``r``)? The ``kitty.frame_edit`` fact; unknown counts as no. Elsewhere live

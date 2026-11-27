@@ -75,16 +75,16 @@ def frame(
     return "".join(codes)
 
 
-def pixels(picture) -> tuple[dict[str, object], bytes]:
-    """A Pillow picture as raw pixels for ``f=24``/``f=32``, zlib-compressed (``o=z``):
-    the keys to send with it, and the payload. Cheaper to make and (in most terminals)
-    to take in than PNG; see tools/decode_bench.py."""
-    import zlib
+def pixels(picture, *, compress: bool = True) -> tuple[dict[str, object], bytes]:
+    """A Pillow picture as raw pixels for ``f=24``/``f=32``.
 
+    ``compress`` adds zlib (``o=z``). Leave it off unless the terminal's
+    ``kitty.fastest_format`` fact is ``zlib``.
+    """
     has_alpha = picture.mode in ("RGBA", "LA") or (picture.mode == "P" and "transparency" in picture.info)
     picture = picture.convert("RGBA" if has_alpha else "RGB")
-    keys = {"f": 32 if has_alpha else 24, "s": picture.width, "v": picture.height, "o": "z"}
-    return keys, zlib.compress(picture.tobytes(), 1)
+    keys: dict[str, object] = {"f": 32 if has_alpha else 24, "s": picture.width, "v": picture.height}
+    return keys, _maybe_compress(picture.tobytes(), keys, compress)
 
 
 def _chunked(first: dict[str, object], data: bytes, more: dict[str, object], chunk_bytes: int) -> str:
@@ -98,15 +98,52 @@ def _chunked(first: dict[str, object], data: bytes, more: dict[str, object], chu
     return "".join(codes)
 
 
-def transmit_pixels(image_id: int, picture, *, chunk_bytes: int = CHUNK_BYTES) -> str:
-    """Send a picture as zlib-compressed raw pixels for later display (``a=t``)."""
-    keys, data = pixels(picture)
-    return _chunked({"a": "t", "t": "d", "i": image_id, **keys, "q": 2}, data, {}, chunk_bytes)
+def transmit_pixels(
+    image_id: int,
+    picture=None,
+    *,
+    data: bytes | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    alpha: bool = False,
+    compress: bool = True,
+    chunk_bytes: int = CHUNK_BYTES,
+) -> str:
+    """Send a picture as raw pixels for later display (``a=t``).
+
+    ``picture`` is a Pillow image. ``data`` is raw RGB or RGBA (``alpha=True``) of
+    ``width`` by ``height``, already decoded, so it is not loaded into Pillow. Pass one
+    of the two, not both. ``compress`` adds zlib (``o=z``). The caller turns that on
+    only when the terminal's ``kitty.fastest_format`` fact is ``zlib``.
+    """
+    if data is not None and picture is not None:
+        raise ValueError("pass a picture or raw data, not both")
+    if data is not None:
+        if not width or not height:
+            raise ValueError("raw pixels need width and height")
+        keys: dict[str, object] = {"f": 32 if alpha else 24, "s": width, "v": height}
+        payload = _maybe_compress(data, keys, compress)
+        return _chunked({"a": "t", "t": "d", "i": image_id, **keys, "q": 2}, payload, {}, chunk_bytes)
+    if picture is None:
+        raise ValueError("picture is required")
+    keys, payload = pixels(picture, compress=compress)
+    return _chunked({"a": "t", "t": "d", "i": image_id, **keys, "q": 2}, payload, {}, chunk_bytes)
 
 
-def edit_pixels(image_id: int, picture, x: int, y: int, *, frame: int = 1, chunk_bytes: int = CHUNK_BYTES) -> str:
-    """Overwrite part of a frame in place with zlib-compressed raw pixels."""
-    keys, data = pixels(picture)
+def _maybe_compress(data: bytes, keys: dict[str, object], compress: bool) -> bytes:
+    if not compress:
+        return data
+    import zlib
+
+    keys["o"] = "z"
+    return zlib.compress(data, 1)
+
+
+def edit_pixels(
+    image_id: int, picture, x: int, y: int, *, frame: int = 1, compress: bool = True, chunk_bytes: int = CHUNK_BYTES
+) -> str:
+    """Overwrite part of a frame in place with raw pixels. ``compress`` adds zlib."""
+    keys, data = pixels(picture, compress=compress)
     first = {"a": "f", "i": image_id, "r": frame, "x": x, "y": y, **keys, "X": 1, "q": 2}
     return _chunked(first, data, {"a": "f"}, chunk_bytes)
 
@@ -142,13 +179,42 @@ def animate(image_id: int, *, run: bool | None = None, frame: int | None = None,
     return command(keys)
 
 
-def place(image_id: int, columns: int, rows: int, placement_id: int = 1) -> str:
+def place(
+    image_id: int,
+    columns: int,
+    rows: int,
+    placement_id: int = 1,
+    *,
+    source: tuple[int, int, int, int] | None = None,
+    offset: tuple[int, int] = (0, 0),
+    z: int | None = None,
+) -> str:
     """A virtual placement (``U=1``) of ``columns x rows`` cells, for placeholders to show.
 
-    Sending it again with the same ids replaces it (e.g. after a resize).
+    Sending it again with the same ids replaces it (e.g. after a resize). ``source`` is
+    the pixel rectangle ``(x, y, width, height)`` of the image to show. ``offset`` is how
+    many pixels into the first cell that rectangle starts. ``z`` is the placement's
+    z-index. Omitted, the whole image sits at the cell corner.
     """
     _check_size(columns, rows)
-    return command({"a": "p", "U": 1, "i": image_id, "p": placement_id, "c": columns, "r": rows, "q": 2})
+    keys: dict[str, object] = {
+        "a": "p",
+        "U": 1,
+        "i": image_id,
+        "p": placement_id,
+        "c": columns,
+        "r": rows,
+    }
+    if source is not None:
+        keys.update(zip("xywh", source))
+    if offset[0]:
+        keys["X"] = offset[0]
+    if offset[1]:
+        keys["Y"] = offset[1]
+    if z is not None:
+        keys["z"] = z
+    keys["q"] = 2
+    return command(keys)
 
 
 def place_here(
