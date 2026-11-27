@@ -142,3 +142,48 @@ async def test_overlay_frames_fill_the_box_whatever_size_it_started_at():
             payload = re.findall(r"1337;File=[^:]*:([^\x07]*)\x07", "".join(written))[-1]
             painted = PILImage.open(io.BytesIO(base64.b64decode(payload))).convert("RGBA")
             assert painted.getchannel("A").getextrema() == (255, 255)
+
+
+def test_chunk_bytes_uses_terminal_escape_limit():
+    assert Capabilities("kitty", terminal="kitty").chunk_bytes == 262144 - 256
+    assert Capabilities("kitty", terminal="ghostty").chunk_bytes == 2 * 1024 * 1024
+    assert Capabilities("kitty", terminal="unknown-term").chunk_bytes == kitty.CHUNK_BYTES
+
+
+async def test_kittyops_fast_path_and_scroll_compose(monkeypatch):
+    """When optional kittyops is importable, LiveImage uses SIMD diff + a=c scroll compose."""
+    import importlib.util
+
+    if importlib.util.find_spec("kittyops") is None:
+        return  # optional accelerator not installed in this environment
+    monkeypatch.delenv("PIXCELL_KITTYOPS", raising=False)
+
+    w, h = 160, 80
+
+    def _scroll_frame(shift_y: int) -> PILImage.Image:
+        buf = bytearray(w * h * 3)
+        for y in range(h):
+            sy = (y - shift_y) & 0xFFFF
+            row = y * w * 3
+            for x in range(w):
+                o = row + x * 3
+                buf[o] = ((x // 4) * 7 + sy * 13 + ((sy // 20) * 53)) & 0xFF
+                buf[o + 1] = (((x // 4) * 11) ^ ((sy // 4) * 29)) & 0xFF
+                buf[o + 2] = ((x // 9) * 37 + (sy // 4) * 5) & 0xFF
+        return PILImage.frombytes("RGB", (w, h), bytes(buf))
+
+    ct.configure(Capabilities("kitty", (8, 16), terminal="ghostty"))
+    live = LiveImage((w, h), fps=50)
+    written = []
+    app = _App(live, written)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.15)
+        written.clear()
+        live.push(_scroll_frame(0))
+        await pilot.pause(0.1)
+        written.clear()
+        live.push(_scroll_frame(16))
+        await pilot.pause(0.1)
+        scrolled = "".join(written)
+    ct.configure(Capabilities("halfblock"))
+    assert "a=c," in scrolled and "a=a," in scrolled and "a=f," in scrolled

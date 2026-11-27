@@ -106,6 +106,17 @@ class Capabilities:
         return self.protocol == "kitty" and self.fact("kitty.frame_edit") is True
 
     @property
+    def chunk_bytes(self) -> int:
+        """Payload bytes per Kitty APC chunk, derived from ``kitty.max_escape_bytes``
+        (capped at 2 MiB and rounded down to a multiple of 4). Falls back to 4096 when
+        the terminal's escape limit is unknown."""
+        limit = self.fact("kitty.max_escape_bytes")
+        if isinstance(limit, int) and limit > 512:
+            usable = min(limit - 256, 2 * 1024 * 1024)
+            return max(kitty.CHUNK_BYTES, usable & ~3)
+        return kitty.CHUNK_BYTES
+
+    @property
     def animation(self) -> str:
         """How pictures move in the chosen protocol: ``native`` (the terminal plays them),
         ``stepped`` (pixcell shows each frame itself: placeholder terminals without

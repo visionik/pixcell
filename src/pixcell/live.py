@@ -28,8 +28,9 @@ WezTerm's memory steady (~200 MB) as frames replace each other. Sixel at 60 mana
 
 from __future__ import annotations
 
+import os
 import threading
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from textual import events
 from textual.message import Message
@@ -39,6 +40,23 @@ from pixcell.textual import OVERLAY, Image, _png, _registry, capabilities, cell_
 
 if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
+
+
+def _load_kittyops() -> Any:
+    """Optionally load the native C99 ``kittyops`` accelerator (``pip install pixcell[fast]``).
+
+    Returns the module when available and not disabled via ``PIXCELL_KITTYOPS=0``,
+    otherwise ``None`` so pixcell stays pure Python by default.
+    """
+    if os.environ.get("PIXCELL_KITTYOPS") == "0":
+        return None
+    try:
+        import kittyops
+
+        kittyops.compression_backend()  # verify shared library loads cleanly
+        return kittyops
+    except Exception:
+        return None
 
 
 class LiveImage(Image):
@@ -78,6 +96,10 @@ class LiveImage(Image):
         self._lock = threading.Lock()
         self._pending: PILImage | None = None
         self._shown: PILImage | None = None  # the canvas the terminal has (Kitty placeholders)
+        self._shown_bytes: bytes | None = None  # raw RGB bytes for optional kittyops accelerator
+        self._kops_mod: Any = None
+        self._kops_encoder: Any = None
+        self._kops_probed: bool = False
         self._geometry: tuple[float, int, int] = (1.0, 0, 0)  # scale, x and y offset of the frame
         self.frames_shown = 0
         self.bytes_sent = 0
@@ -152,16 +174,32 @@ class LiveImage(Image):
             canvas.paste(picture.convert("RGB"), offset)
         return canvas
 
+    def _get_kops(self) -> tuple[Any, Any]:
+        if not self._kops_probed:
+            self._kops_probed = True
+            mod = _load_kittyops()
+            if mod is not None:
+                try:
+                    self._kops_encoder = mod.Encoder(zlib_level=3)
+                    self._kops_mod = mod
+                except Exception:
+                    self._kops_mod = None
+                    self._kops_encoder = None
+        return self._kops_mod, self._kops_encoder
+
     def _send(self, columns: int, rows: int) -> None:
         """Send the whole current frame and place it (first time, or the size changed)."""
         canvas = self._fit(self.image)
         codes = ""
         if self._sent_box is not None:
             codes += kitty.delete(self._image_id)
+        if self._kops_encoder is not None:
+            self._kops_encoder.reset()
         codes += self._whole(self._image_id, canvas) + kitty.place(self._image_id, columns, rows)
         self._write_counted(codes)
         _registry.add(self._image_id, canvas.width * canvas.height * 4, self)
         self._shown = canvas
+        self._shown_bytes = canvas.tobytes() if self._get_kops()[0] is not None else None
         self._mark_sent(canvas.size, (columns, rows))
         self.refresh()
 
@@ -174,16 +212,45 @@ class LiveImage(Image):
         if self._shown is None or canvas.size != self._shown.size:
             self._send(*self._placed)
             return
+
+        caps = capabilities()
+        if caps.edits and caps.frame_format == "pixels":
+            kops_mod, kops_enc = self._get_kops()
+            if kops_mod is not None and kops_enc is not None:
+                prev_bytes = self._shown_bytes if self._shown_bytes is not None else self._shown.tobytes()
+                curr_bytes = canvas.tobytes()
+                storage = caps.fact("kitty.storage_bytes")
+                kcaps = kops_mod.Caps(
+                    max_escape_bytes=caps.chunk_bytes,
+                    storage_bytes=storage if isinstance(storage, int) and storage > 0 else 0,
+                    frame_edit=True,
+                    frame_edit_zlib=True,
+                    compose=(caps.animation == "native"),
+                    shm=False,
+                    placeholders=True,
+                    allow_scroll_compose=(caps.animation == "native"),
+                    af_max_coverage=1.01,
+                    af_max_pixels=canvas.width * canvas.height,
+                )
+                apc_bytes, _stats = kops_enc.encode_frame(
+                    self._image_id, prev_bytes, curr_bytes, canvas.width, canvas.height, 3, kcaps
+                )
+                if apc_bytes:
+                    self._write_counted(apc_bytes.decode("ascii"))
+                self._shown = canvas
+                self._shown_bytes = curr_bytes
+                return
+
         changed = ImageChops.difference(self._shown, canvas).getbbox()
         if changed is None:
             return
-        if capabilities().edits:
+        if caps.edits:
             left, top, right, bottom = changed
             piece = canvas.crop(changed)
-            if capabilities().frame_format == "png":
-                code = kitty.edit(self._image_id, _png(piece), left, top)
+            if caps.frame_format == "png":
+                code = kitty.edit(self._image_id, _png(piece), left, top, chunk_bytes=caps.chunk_bytes)
             else:
-                code = kitty.edit_pixels(self._image_id, piece, left, top)
+                code = kitty.edit_pixels(self._image_id, piece, left, top, chunk_bytes=caps.chunk_bytes)
             self._write_counted(code)
         else:
             # Whole frames, double-buffered (as stepped animation): the spare id gets the
@@ -195,9 +262,10 @@ class LiveImage(Image):
         self._shown = canvas
 
     def _whole(self, image_id: int, canvas: "PILImage") -> str:
-        if capabilities().frame_format == "png":
-            return kitty.transmit(image_id, _png(canvas))
-        return kitty.transmit_pixels(image_id, canvas)
+        caps = capabilities()
+        if caps.frame_format == "png":
+            return kitty.transmit(image_id, _png(canvas), chunk_bytes=caps.chunk_bytes)
+        return kitty.transmit_pixels(image_id, canvas, chunk_bytes=caps.chunk_bytes)
 
     def _write_counted(self, codes: str) -> None:
         self.bytes_sent += len(codes)
